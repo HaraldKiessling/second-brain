@@ -24,7 +24,9 @@ def _ki(wurzel, einst):
     if not (einst['ki']['aktiv'] and schluessel):
         return None
     return einordnen.KI(schluessel, einst['ki']['modell'], daten.themen(wurzel),
-                        daten.kontext(wurzel).personen, einst['ki']['max_pro_lauf'])
+                        daten.kontext(wurzel).personen, einst['ki']['max_pro_lauf'],
+                        hinweise=einst['ki']['hinweise'],
+                        unterordner=daten.bekannte_unterordner(wurzel))
 
 
 def _einordnen(args):
@@ -55,7 +57,9 @@ def _mail_abruf(args):
             if d.endswith('.eml'):
                 with open(os.path.join(args.eml, d), 'rb') as fh:
                     mails.append(mail.mail_aus_bytes(fh.read()))
-        print('%s: %s' % (args.konto, mail.verarbeiten(mails, ablage, regelwerk, **stufen)))
+        bilanz = mail.verarbeiten(mails, ablage, regelwerk, **stufen)
+        print('%s: %s' % (args.konto, bilanz))
+        mail.lauf_protokollieren(args.daten, args.konto, bilanz)
         return 0
 
     benutzer, passwort = os.environ.get('MAIL_USER'), os.environ.get('MAIL_PASSWORD')
@@ -65,9 +69,10 @@ def _mail_abruf(args):
     status = mail.status_laden(args.daten, args.konto)
     mails, neu = mail.imap_abruf(args.host, benutzer, passwort, status,
                                  postfach=args.postfach, start_tage=args.tage)
-    print('%s: %d neue Mails, %s' % (args.konto, len(mails),
-                                     mail.verarbeiten(mails, ablage, regelwerk, **stufen)))
+    bilanz = mail.verarbeiten(mails, ablage, regelwerk, **stufen)
+    print('%s: %d neue Mails, %s' % (args.konto, len(mails), bilanz))
     mail.status_speichern(args.daten, args.konto, neu)
+    mail.lauf_protokollieren(args.daten, args.konto, bilanz)
     return 0
 
 

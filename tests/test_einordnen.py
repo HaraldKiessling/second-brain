@@ -301,3 +301,41 @@ def test_kein_vorschlag_wenn_regel_schon_greift_oder_abgelehnt(repo):
     with open(os.path.join(repo, 'regeln', 'mail-vorschlaege.json'), 'w') as fh:
         json.dump({'abgelehnt': ['praxis.de'], 'vorschlaege': []}, fh)
     assert daten.regelvorschlaege_schreiben(repo) == []
+
+
+# --- KI mit mehreren Vorschlaegen, Laufprotokoll ------------------------------
+
+def test_ki_mehrdeutig_landet_mit_alternativen_im_eingang(repo):
+    ki, gesendet = ki_mit({'spam': False, 'vorschlaege': [
+        {'thema': 'versicherungen', 'personen': ['anna'], 'konfidenz': 0.85, 'grund': 'Versicherung'},
+        {'thema': 'steuer', 'unterordner': 'grundsteuer', 'personen': ['anna'], 'konfidenz': 0.75}]})
+    ki.hinweise = 'Gebaeudeversicherung gehoert zur Immobilie.'
+    ki.unterordner = {'versicherungen': {'01Hausrat'}}
+    b = lauf(repo, [m('vers@x.de', 'Gebaeudeversicherung', anhang='p.pdf')], ki)
+    assert b.offen == 1
+    prompt = gesendet[0]['messages'][0]['content']
+    assert 'Gebaeudeversicherung gehoert zur Immobilie.' in prompt
+    assert 'Unterordner: 01Hausrat' in prompt
+    v = eingang(repo)[0].meta['vorschlag']
+    assert v['konfidenz'] == 0.6 and 'mehrere Ordner' in v['grund']
+    assert v['alternativen'][0]['thema'] == 'steuer'
+
+
+def test_ki_eindeutig_legt_ab(repo):
+    ki, _ = ki_mit({'spam': False, 'vorschlaege': [
+        {'thema': 'steuer', 'personen': ['anna'], 'konfidenz': 0.95},
+        {'thema': 'edv', 'personen': ['anna'], 'konfidenz': 0.3}]})
+    assert lauf(repo, [m('amt@x.de', 'Bescheid', anhang='b.pdf')], ki).notiz == 1
+
+
+def test_lauf_wird_fuer_die_uebersicht_protokolliert(repo):
+    ablage = mail.Ablage(repo, 'gmx', heute=HEUTE)
+    b = mail.verarbeiten([m('billing@hoster-beispiel.de', 'Rechnung', anhang='r.pdf'),
+                          m('freund@mail.de', 'Hallo')], ablage, daten.regelwerk(repo))
+    jetzt = datetime.datetime(2026, 10, 30, 12, tzinfo=datetime.timezone.utc)
+    pfad = mail.lauf_protokollieren(repo, 'gmx', b, jetzt)
+    zeile = json.loads(open(pfad, encoding='utf-8').readline())
+    assert (zeile['notiz'], zeile['index'], zeile['konto']) == (1, 1, 'gmx')
+    [e] = zeile['eintraege']
+    assert e['pfad'].startswith('notizen/2026/edv/') and e['durch'] == 'regel/hoster'
+    assert mail.lauf_protokollieren(repo, 'gmx', mail.Bilanz(), jetzt) is None

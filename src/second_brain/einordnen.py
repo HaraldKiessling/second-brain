@@ -36,7 +36,8 @@ STANDARD = {
     'schwelle': 0.8,       # ab dieser Konfidenz ohne Rueckfrage ablegen
     'spam_schwelle': 0.6,  # ab diesem Spam-Wert verwerfen (bleibt im Index sichtbar)
     'eigene_adressen': [],  # Mails von hier werden immer erfasst (an sich selbst gesendet)
-    'ki': {'aktiv': False, 'modell': '', 'max_pro_lauf': 20},
+    'ki': {'aktiv': False, 'modell': '', 'max_pro_lauf': 20,
+           'hinweise': ''},  # Ablagelogik in Haralds Worten, geht in jede Anfrage
 }
 
 FREEMAIL = {'gmail.com', 'googlemail.com', 'gmx.de', 'gmx.net', 'gmx.at', 'web.de',
@@ -69,11 +70,15 @@ class Vorschlag:
     grund: str
     unterordner: str = ''
     personen: list = field(default_factory=list)
+    alternativen: list = field(default_factory=list)  # weitere Vorschlaege (KI)
 
     def als_dict(self):
-        return {'thema': self.thema, 'unterordner': self.unterordner,
-                'personen': list(self.personen), 'konfidenz': round(self.konfidenz, 2),
-                'durch': self.durch, 'grund': self.grund}
+        d = {'thema': self.thema, 'unterordner': self.unterordner,
+             'personen': list(self.personen), 'konfidenz': round(self.konfidenz, 2),
+             'durch': self.durch, 'grund': self.grund}
+        if self.alternativen:
+            d['alternativen'] = [a.als_dict() for a in self.alternativen]
+        return d
 
 
 def einstellungen(roh):
@@ -313,17 +318,25 @@ class Lerner:
 # --- KI (optional) ---------------------------------------------------------
 
 class KI:
-    """Fragt ein Sprachmodell ueber OpenRouter nach einem Vorschlag."""
+    """Fragt ein Sprachmodell ueber OpenRouter nach bis zu drei Vorschlaegen.
+
+    Liegen zwei Vorschlaege nah beieinander (Abstand unter MEHRDEUTIG), ist
+    die Ablage nicht eindeutig: die Konfidenz wird unter die Schwelle
+    gedrueckt, die Mail landet mit allen Vorschlaegen im Eingang.
+    """
 
     URL = 'https://openrouter.ai/api/v1/chat/completions'
+    MEHRDEUTIG = 0.2
 
     def __init__(self, schluessel, modell, themen, personen, max_anfragen=20,
-                 senden=None):
+                 senden=None, hinweise='', unterordner=None):
         self.schluessel = schluessel
         self.modell = modell
         self.themen = themen
         self.personen = personen
         self.rest = max_anfragen
+        self.hinweise = hinweise or ''
+        self.unterordner = unterordner or {}  # thema -> bekannte Unterordner
         self._senden = senden or self._http
 
     def _http(self, nutzlast):
@@ -336,18 +349,43 @@ class KI:
             return json.load(antwort)
 
     def _prompt(self, absender, betreff, text, anhaenge, empfaenger=''):
-        themen = '\n'.join('- %s: %s' % (s, t.get('zweck') or t.get('name', s))
-                           for s, t in self.themen.items())
+        zeilen = []
+        for s, t in self.themen.items():
+            z = '- %s (Ordner %s): %s' % (s, t.get('ablage', ''), t.get('zweck') or t.get('name', s))
+            if self.unterordner.get(s):
+                z += '; Unterordner: ' + ', '.join(sorted(self.unterordner[s])[:15])
+            zeilen.append(z)
+        hinweise = ('Ablageregeln des Haushalts:\n%s\n\n' % self.hinweise.strip()
+                    if self.hinweise.strip() else '')
         return (
-            'Ordne diese Mail in ein persoenliches Archiv ein.\n'
-            'Themen:\n%s\nPersonen: %s\n\n'
-            'Antworte nur mit JSON: {"thema": "<slug oder leer>", '
-            '"unterordner": "<kurzer Pfad, z. B. firma/rechnungen, oder leer>", '
-            '"personen": ["<slug>"], "spam": true/false, '
-            '"konfidenz": <0 bis 1>, "grund": "<ein Satz>"}\n\n'
+            'Ordne diese Mail in ein persoenliches Archiv ein. Das Thema ist der '
+            'Ordner der Ablage; ein Unterordner ist optional, bevorzugt einer der '
+            'genannten, sonst ein kurzer neuer Name. Erfinde keine Themen.\n'
+            'Themen:\n%s\nPersonen: %s\n\n%s'
+            'Wenn mehrere Ordner in Frage kommen, nenne bis zu drei, den besten zuerst, '
+            'jeweils mit eigener Konfidenz.\n'
+            'Antworte nur mit JSON: {"spam": true/false, "vorschlaege": [{"thema": "<slug>", '
+            '"unterordner": "<Pfad oder leer>", "personen": ["<slug>"], '
+            '"konfidenz": <0 bis 1>, "grund": "<ein Satz>"}]}\n\n'
             'Absender: %s\nEmpfaenger: %s\nBetreff: %s\nAnhaenge: %s\n\n%s'
-            % (themen, ', '.join(sorted(self.personen)), absender, empfaenger, betreff,
-               ', '.join(anhaenge) or 'keine', (text or '')[:1500]))
+            % ('\n'.join(zeilen), ', '.join(sorted(self.personen)), hinweise, absender,
+               empfaenger, betreff, ', '.join(anhaenge) or 'keine', (text or '')[:1500]))
+
+    def _vorschlag(self, d, durch):
+        thema = d.get('thema') or ''
+        if thema not in self.themen:
+            return None
+        personen = [p for p in d.get('personen') or [] if p in self.personen]
+        uo = str(d.get('unterordner') or '').strip('/')
+        if not unterordner_gueltig(uo):
+            uo = ''
+        try:
+            konf = max(0.0, min(1.0, float(d.get('konfidenz') or 0)))
+        except (TypeError, ValueError):
+            konf = 0.0
+        return Vorschlag(thema=thema, unterordner=uo, personen=personen,
+                         konfidenz=konf if personen else min(konf, 0.5),
+                         durch=durch, grund=str(d.get('grund', '')))
 
     def frage(self, absender, betreff, text, anhaenge=(), empfaenger=''):
         """Vorschlag oder None (Budget aufgebraucht, Fehler, unbrauchbare Antwort)."""
@@ -368,21 +406,25 @@ class KI:
         except Exception as exc:  # KI ist optional: Fehler fuehren zur Rueckfrage
             print('KI nicht verfuegbar: %s' % exc)
             return None
-        konf = max(0.0, min(1.0, float(daten.get('konfidenz') or 0)))
         durch = 'ki/' + self.modell
+        roh = daten.get('vorschlaege')
+        if not isinstance(roh, list):  # aeltere Antwortform mit einem Vorschlag
+            roh = [daten]
         if daten.get('spam'):
-            return Vorschlag(thema='', konfidenz=konf, durch=durch,
-                             grund='Spam: ' + str(daten.get('grund', '')))
-        thema = daten.get('thema') or ''
-        if thema not in self.themen:
+            konf = max([float(d.get('konfidenz') or 0) for d in roh if isinstance(d, dict)] or [0])
+            return Vorschlag(thema='', konfidenz=min(1.0, konf), durch=durch,
+                             grund='Spam: ' + str((roh[0] if roh else {}).get('grund', '')))
+        liste = [v for v in (self._vorschlag(d, durch) for d in roh[:3] if isinstance(d, dict))
+                 if v is not None]
+        if not liste:
             return None
-        personen = [p for p in daten.get('personen') or [] if p in self.personen]
-        uo = str(daten.get('unterordner') or '')
-        if not unterordner_gueltig(uo):
-            uo = ''
-        return Vorschlag(thema=thema, unterordner=uo, personen=personen,
-                         konfidenz=konf if personen else min(konf, 0.5),
-                         durch=durch, grund=str(daten.get('grund', '')))
+        liste.sort(key=lambda v: -v.konfidenz)
+        bester, rest = liste[0], liste[1:]
+        bester.alternativen = rest
+        if rest and bester.konfidenz - rest[0].konfidenz < self.MEHRDEUTIG:
+            bester.grund += ' (mehrere Ordner moeglich)'
+            bester.konfidenz = min(bester.konfidenz, 0.6)
+        return bester
 
 
 # --- Gesamtentscheidung ----------------------------------------------------
