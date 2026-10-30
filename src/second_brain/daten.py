@@ -46,6 +46,20 @@ def lerner(wurzel, quelle='mail'):
                             ablagewissen(wurzel), einstellungen(wurzel)['eigene_adressen'])
 
 
+def bekannte_unterordner(wurzel):
+    """Thema -> Unterordner, die es schon gibt (Notizen und Ablagewissen)."""
+    from . import einordnen
+    th = themen(wurzel)
+    bekannt = {}
+    for b in einordnen.beispiele_aus_notizen(notiz_pfade(wurzel), th):
+        if b.unterordner:
+            bekannt.setdefault(b.thema, set()).add(b.unterordner)
+    for w in ablagewissen(wurzel):
+        if w.get('unterordner'):
+            bekannt.setdefault(w['thema'], set()).add(w['unterordner'])
+    return bekannt
+
+
 def regelvorschlaege_schreiben(wurzel, quelle='mail'):
     """regeln/<quelle>-vorschlaege.json neu berechnen; abgelehnte bleiben gemerkt."""
     from . import einordnen

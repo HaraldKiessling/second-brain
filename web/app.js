@@ -130,7 +130,7 @@ function zeigeReiter(name) {
   document.querySelectorAll('.reiter').forEach((s) => { s.hidden = s.id !== name; });
   document.querySelectorAll('#reiter button').forEach((b) => b.classList.toggle('aktiv', b.dataset.reiter === name));
   merke('sb-reiter', name);
-  return ({ eingang: zeigeEingang, zugang: zeigeSecrets, regeln: zeigeRegeln, dateien: zeigeDatei, ablaeufe: zeigeLaeufe })[name]();
+  return ({ uebersicht: zeigeUebersicht, eingang: zeigeEingang, zugang: zeigeSecrets, regeln: zeigeRegeln, dateien: zeigeDatei, ablaeufe: zeigeLaeufe })[name]();
 }
 
 function zelle(zeile, text, klasse) {
@@ -299,6 +299,13 @@ function auswahlFelder(vorgabe) {
     unterordner: uo.value.trim(),
     personen: [...personen.querySelectorAll('input:checked')].map((c) => c.value),
   });
+  box.setzen = (v) => {
+    thema.value = v.thema || '';
+    uo.value = v.unterordner || '';
+    if (v.personen && v.personen.length) {
+      personen.querySelectorAll('input').forEach((c) => { c.checked = v.personen.includes(c.value); });
+    }
+  };
   return box;
 }
 
@@ -328,6 +335,18 @@ function eingangKarte(e) {
   karte.append(vb);
 
   const felder = auswahlFelder(v || {});
+  const alternativen = (v && v.alternativen) || [];
+  if (alternativen.length) {
+    const wahl = document.createElement('div');
+    wahl.className = 'hinweis';
+    wahl.append('Mögliche Ordner: ');
+    for (const a of [v, ...alternativen]) {
+      const t = (zustand.themen[a.thema] || {}).name || a.thema;
+      wahl.append(knopf(`${[t, a.unterordner].filter(Boolean).join(' / ')} (${Math.round((a.konfidenz || 0) * 100)} %)`,
+        () => felder.setzen(a), 'klein leise'));
+    }
+    vb.append(wahl);
+  }
   const fehler = document.createElement('p');
   fehler.className = 'fehler';
   const tun = (fn) => async () => {
@@ -367,7 +386,7 @@ function auswahlPruefen(w) {
 }
 
 // Eingang -> Notiz unter notizen/<jahr>/<thema>/, mit Protokollzeile, ein Commit.
-async function eingangAblegen(e, w, durch) {
+async function eingangAblegen(e, w, durch, wie = 'aus Eingang abgelegt') {
   const meta = { ...e.meta };
   const datum = String(meta.erstellt);
   delete meta.offen_grund;
@@ -384,10 +403,101 @@ async function eingangAblegen(e, w, durch) {
   const protokoll = `protokoll/${heute.slice(0, 7)}.md`;
   await commitMehrere(async () => [
     { pfad: ziel, text: notizSchreiben(meta, e.text) },
-    { pfad: e.pfad, loeschen: true },
-    { pfad: protokoll, text: protokollZeile(await dateiOderLeer(protokoll), heute, durch, `Notiz \`${meta.id}\` aus Eingang abgelegt`) },
-  ], `eingang: ${meta.id} -> ${w.thema} (Web)`);
+    ...(ziel !== e.pfad ? [{ pfad: e.pfad, loeschen: true }] : []),
+    { pfad: protokoll, text: protokollZeile(await dateiOderLeer(protokoll), heute, durch, `Notiz \`${meta.id}\` ${wie}`) },
+  ], `${e.pfad.startsWith('eingang/') ? 'eingang' : 'korrektur'}: ${meta.id} -> ${w.thema} (Web)`);
   melde(`Abgelegt unter ${meta.ablage}.`, 'gut');
+  return ziel;
+}
+
+// Uebersicht: Ablaeufe und automatisch abgelegte Notizen mit Korrektur
+
+function unterordnerAusAblage(ablage, thema) {
+  const teile = String(ablage || '').split('/').filter(Boolean);
+  const t = zustand.themen[thema] || {};
+  return teile.length > 2 && teile[1] === t.ablage ? teile.slice(2).join('/') : '';
+}
+
+async function laeufeLaden() {
+  const monate = [0, 1].map((n) => { const d = new Date(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - n); return d.toISOString().slice(0, 7); });
+  const texte = await Promise.all(monate.map((m) => dateiOderLeer(`protokoll/laeufe/${m}.jsonl`).catch(() => '')));
+  return texte.join('\n').split('\n').filter(Boolean)
+    .map((z) => { try { return JSON.parse(z); } catch { return null; } })
+    .filter(Boolean).sort((a, b) => b.zeit.localeCompare(a.zeit));
+}
+
+async function zeigeUebersicht() {
+  const status = $('#ablauf-status');
+  const tbody = $('#lauf-liste');
+  const liste = $('#auto-liste');
+  tbody.textContent = ''; liste.textContent = 'Lade …'; status.textContent = '';
+  let laeufe;
+  try {
+    await stammdatenLaden();
+    if (!zustand.regeln) zustand.regeln = JSON.parse((await dateiLesen(REGEL_DATEI)).text);
+    laeufe = await laeufeLaden();
+    const d = await gh(`/repos/${zustand.repo}/actions/workflows/${MAIL_WORKFLOW}/runs?per_page=1`);
+    const l = d.workflow_runs[0];
+    if (l) {
+      const [text, klasse] = ERGEBNIS[l.conclusion] || [STATUS[l.status] || l.status, ''];
+      status.textContent = `Letzter Abruf: ${new Date(l.created_at).toLocaleString('de-DE')}, ${text}.`;
+      status.className = klasse;
+    }
+  } catch (e) { liste.textContent = ''; melde(e.message, 'fehler'); return; }
+  for (const l of laeufe.slice(0, 15)) {
+    const z = tbody.insertRow();
+    zelle(z, new Date(l.zeit).toLocaleString('de-DE'));
+    zelle(z, l.konto);
+    zelle(z, `${l.notiz} Notizen, ${l.offen} Eingang, ${l.index} Index, ${l.verwerfen} verworfen`);
+  }
+  if (!laeufe.length) zelle(tbody.insertRow(), 'Noch keine Abrufe mit neuen Mails.', 'hinweis');
+  liste.textContent = '';
+  const auto = laeufe.flatMap((l) => (l.eintraege || []).filter((e) => e.aktion === 'notiz' && e.durch !== 'manuell')).slice(0, 30);
+  if (!auto.length) { liste.textContent = 'Noch nichts automatisch abgelegt.'; liste.className = 'hinweis'; }
+  for (const a of auto) liste.append(autoKarte(a));
+}
+
+function autoKarte(a) {
+  const karte = document.createElement('div');
+  karte.className = 'karte';
+  const h = document.createElement('h3');
+  h.textContent = a.titel || '(ohne Betreff)';
+  const info = document.createElement('div');
+  info.className = 'hinweis';
+  const t = (zustand.themen[a.thema] || {}).name || a.thema;
+  info.textContent = `${a.absender} · ${t} · ${a.durch}${a.konfidenz < 1 ? ` (${Math.round(a.konfidenz * 100)} %)` : ''}`;
+  const fehler = document.createElement('p');
+  fehler.className = 'fehler';
+  karte.append(h, info);
+  karte.append(knopf('Korrigieren', async (ev) => {
+    ev.target.remove();
+    let e;
+    try {
+      const { text } = await dateiLesen(a.pfad);
+      e = { pfad: a.pfad, ...notizLesen(text) };
+    } catch {
+      fehler.textContent = 'Notiz wurde inzwischen verschoben oder gelöscht.';
+      return;
+    }
+    const thema = (e.meta.themen || [])[0];
+    const felder = auswahlFelder({ thema, unterordner: unterordnerAusAblage(e.meta.ablage, thema), personen: e.meta.personen });
+    const ablage = document.createElement('div');
+    ablage.className = 'hinweis';
+    ablage.textContent = 'Jetzt: ' + (e.meta.ablage || '');
+    karte.insertBefore(ablage, fehler);
+    karte.insertBefore(felder, fehler);
+    karte.insertBefore(knopf('Speichern', async () => {
+      const w = felder.wert();
+      const f = auswahlPruefen(w);
+      if (f) { fehler.textContent = f; return; }
+      try {
+        a.pfad = await eingangAblegen(e, w, 'manuell', 'korrigiert');
+        ablage.textContent = 'Jetzt: ' + [jahrOrdner(String(e.meta.erstellt)), (zustand.themen[w.thema] || {}).ablage, unterordnerEinsetzen(w.unterordner, String(e.meta.erstellt))].filter(Boolean).join('/');
+        felder.remove();
+      } catch (err) { fehler.textContent = err.message; }
+    }, ''), fehler);
+  }, 'klein leise'), fehler);
+  return karte;
 }
 
 // Eingang -> Indexeintrag; bei Spam zusaetzlich Absender in die Verwerfen-Liste.
@@ -691,7 +801,7 @@ function starten() {
   $('#reiter').hidden = false;
   $('#abmelden').hidden = false;
   $('#repo-name').textContent = zustand.repo;
-  zeigeReiter(lade('sb-reiter') || 'eingang');
+  zeigeReiter(lade('sb-reiter') || 'uebersicht');
 }
 
 document.addEventListener('DOMContentLoaded', () => {

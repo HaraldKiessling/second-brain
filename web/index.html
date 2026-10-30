@@ -30,12 +30,23 @@
     </section>
 
     <nav id="reiter" hidden>
-      <button data-reiter="eingang" class="aktiv">Eingang</button>
+      <button data-reiter="uebersicht" class="aktiv">Übersicht</button>
+      <button data-reiter="eingang">Eingang</button>
       <button data-reiter="zugang">Zugangsdaten</button>
       <button data-reiter="regeln">Regeln</button>
       <button data-reiter="dateien">Einstellungen</button>
       <button data-reiter="ablaeufe">Abläufe</button>
     </nav>
+
+    <section id="uebersicht" class="reiter" hidden>
+      <h2>Übersicht</h2>
+      <p id="ablauf-status"></p>
+      <h3>Abrufe</h3>
+      <table><thead><tr><th>Zeit</th><th>Konto</th><th>Ergebnis</th></tr></thead><tbody id="lauf-liste"></tbody></table>
+      <h3>Automatisch abgelegt</h3>
+      <p class="hinweis">Was Regeln, Heuristik oder KI ohne Rückfrage abgelegt haben. Liegt etwas falsch, korrigiere es; daraus lernt das System.</p>
+      <div id="auto-liste"></div>
+    </section>
 
     <section id="eingang" class="reiter" hidden>
       <h2>Eingang</h2>
