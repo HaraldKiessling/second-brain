@@ -96,8 +96,20 @@ def ziel(meta, themen):
     return ':%s/%s' % (SAMMELORDNER, meta['id'])
 
 
-def abgleichen(wurzel, bruecke, anhaenge=None):
-    """Neue Anhaenge hochladen und verschobene Notizen nachziehen. Liefert (hoch, verschoben)."""
+def _lokale_dokumente(verz):
+    """Dateien eines Anhang-Ordners ohne kleine Bilder, wie Mail.dokumente."""
+    from .mail import BILD_ENDUNGEN, BILD_MINDESTGROESSE
+    return [d for d in sorted(os.listdir(verz))
+            if not (os.path.splitext(d)[1].lower() in BILD_ENDUNGEN
+                    and os.path.getsize(os.path.join(verz, d)) < BILD_MINDESTGROESSE)]
+
+
+def abgleichen(wurzel, bruecke, anhaenge=None, nachtragen=False):
+    """Neue Anhaenge hochladen und verschobene Notizen nachziehen. Liefert (hoch, verschoben).
+
+    nachtragen: Notizen aus der Zeit vor `anhaenge` bekommen die Liste aus dem
+    Anhang-Ordner (z. B. ein Artefakt eines frueheren Abrufs).
+    """
     with open(os.path.join(wurzel, 'config', 'themen.yaml'), encoding='utf-8') as fh:
         themen = (yaml.safe_load(fh) or {}).get('themen', {})
     hoch = verschoben = 0
@@ -114,6 +126,9 @@ def abgleichen(wurzel, bruecke, anhaenge=None):
                     except nz.FormatFehler:
                         continue
                 namen = n.meta.get('anhaenge') or []
+                lokal = os.path.join(anhaenge or '', n.meta['id'])
+                if not namen and nachtragen and anhaenge and os.path.isdir(lokal):
+                    namen = n.meta['anhaenge'] = _lokale_dokumente(lokal)
                 if not namen:
                     continue
                 soll, ist = ziel(n.meta, themen), n.meta.get('drive')
@@ -121,7 +136,6 @@ def abgleichen(wurzel, bruecke, anhaenge=None):
                     continue
                 try:
                     if ist is None:
-                        lokal = os.path.join(anhaenge or '', n.meta['id'])
                         if not (anhaenge and os.path.isdir(lokal)):
                             continue
                         for name in namen:
