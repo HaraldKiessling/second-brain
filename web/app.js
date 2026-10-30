@@ -9,13 +9,13 @@ const SECRETS = [
   { name: 'MAIL_GMX_PASSWORD', wofuer: 'GMX: App-Passwort für IMAP' },
   { name: 'MAIL_GMAIL_USER', wofuer: 'Gmail: Mail-Adresse' },
   { name: 'MAIL_GMAIL_PASSWORD', wofuer: 'Gmail: App-Passwort (Google-Konto → Sicherheit → App-Passwörter)' },
-  { name: 'OPENROUTER_API_KEY', wofuer: 'KI-Einordnen (später)' },
+  { name: 'OPENROUTER_API_KEY', wofuer: 'KI-Einordnen (optional, einschalten in config/einordnen.yaml)' },
 ];
 const REGEL_DATEI = 'regeln/mail.json';
 const MAIL_WORKFLOW = 'mail.yml';
 
 const $ = (sel) => document.querySelector(sel);
-const zustand = { repo: '', token: '', themen: {}, personen: {}, regeln: null, regelSha: '', bearbeitet: -1 };
+const zustand = { repo: '', token: '', themen: {}, personen: {}, regeln: null, regelSha: '', bearbeitet: -1, regelVonMail: null };
 
 // --- Speicher (localStorage kann fehlen, z. B. im privaten Modus) ----------
 
@@ -64,6 +64,44 @@ async function dateiSchreiben(pfad, text, sha, nachricht) {
   return d.content.sha;
 }
 
+// Mehrere Dateien in einem Commit schreiben oder loeschen (Git-Data-API).
+// aenderungen: [{ pfad, text }] oder [{ pfad, loeschen: true }]. Laeuft
+// parallel ein Ablauf, wird mit dem neuen Stand bis zu dreimal wiederholt.
+async function commitMehrere(erzeugen, nachricht) {
+  const basis = `/repos/${zustand.repo}/git`;
+  for (let versuch = 1; ; versuch++) {
+    const ref = await gh(`${basis}/ref/heads/main`);
+    const kopf = await gh(`${basis}/commits/${ref.object.sha}`);
+    const aenderungen = await erzeugen();
+    const baum = await gh(`${basis}/trees`, {
+      method: 'POST',
+      body: JSON.stringify({
+        base_tree: kopf.tree.sha,
+        tree: aenderungen.map((a) => (a.loeschen
+          ? { path: a.pfad, mode: '100644', type: 'blob', sha: null }
+          : { path: a.pfad, mode: '100644', type: 'blob', content: a.text })),
+      }),
+    });
+    const commit = await gh(`${basis}/commits`, {
+      method: 'POST',
+      body: JSON.stringify({ message: nachricht, tree: baum.sha, parents: [kopf.sha] }),
+    });
+    try {
+      await gh(`${basis}/refs/heads/main`, { method: 'PATCH', body: JSON.stringify({ sha: commit.sha }) });
+      return;
+    } catch (e) {
+      if (versuch >= 3) throw e;
+    }
+  }
+}
+
+async function dateiOderLeer(pfad) {
+  try { return (await dateiLesen(pfad)).text; } catch (e) {
+    if (e.message.startsWith('GitHub 404')) return '';
+    throw e;
+  }
+}
+
 async function secretSetzen(name, wert) {
   await sodium.ready;
   const schluessel = await gh(`/repos/${zustand.repo}/actions/secrets/public-key`);
@@ -91,7 +129,7 @@ function zeigeReiter(name) {
   document.querySelectorAll('.reiter').forEach((s) => { s.hidden = s.id !== name; });
   document.querySelectorAll('#reiter button').forEach((b) => b.classList.toggle('aktiv', b.dataset.reiter === name));
   merke('sb-reiter', name);
-  ({ zugang: zeigeSecrets, regeln: zeigeRegeln, dateien: zeigeDatei, ablaeufe: zeigeLaeufe })[name]();
+  return ({ eingang: zeigeEingang, zugang: zeigeSecrets, regeln: zeigeRegeln, dateien: zeigeDatei, ablaeufe: zeigeLaeufe })[name]();
 }
 
 function zelle(zeile, text, klasse) {
@@ -144,6 +182,262 @@ async function secretAbfragen(name) {
   } catch (e) { melde(e.message, 'fehler'); }
 }
 
+// Eingang
+
+// Frontmatter wie in src/second_brain/notiz.py. CORE_SCHEMA laesst Datumswerte
+// als Text stehen und schreibt sie ohne Anfuehrungszeichen, so dass Python sie
+// wieder als Datum liest.
+const PFLICHTFELDER = ['id', 'erstellt', 'quelle', 'personen', 'themen'];
+
+function notizLesen(inhalt) {
+  const ende = inhalt.indexOf('\n---', 4);
+  if (!inhalt.startsWith('---\n') || ende < 0) throw new Error('kein Frontmatter');
+  return { meta: jsyaml.load(inhalt.slice(4, ende), { schema: jsyaml.CORE_SCHEMA }) || {},
+    text: inhalt.slice(ende + 4).replace(/^\n+/, '') };
+}
+
+function notizSchreiben(meta, text) {
+  const reihenfolge = [...PFLICHTFELDER, ...Object.keys(meta).filter((k) => !PFLICHTFELDER.includes(k)).sort()];
+  const geordnet = {};
+  for (const k of reihenfolge) if (k in meta) geordnet[k] = meta[k];
+  const kopf = jsyaml.dump(geordnet, { schema: jsyaml.CORE_SCHEMA, flowLevel: 1, lineWidth: -1 }).trim();
+  return `---\n${kopf}\n---\n\n${text.replace(/\n+$/, '')}\n`;
+}
+
+function jahrOrdner(datum) {
+  const jahr = Number(datum.slice(0, 4));
+  return jahr === new Date().getFullYear() ? `0-${jahr}` : String(jahr);
+}
+
+function unterordnerEinsetzen(uo, datum) {
+  return (uo || '').replaceAll('{jahr}', datum.slice(0, 4)).replaceAll('{monat}', datum.slice(5, 7)).replace(/^\/+|\/+$/g, '');
+}
+
+function unterordnerGueltig(uo) {
+  return !uo || uo.split('/').every((t) => t.trim() && t !== '.' && t !== '..' && !t.includes('\\'));
+}
+
+function absenderAdresse(e) {
+  if (e.meta.absender) return String(e.meta.absender);
+  const von = /^Von: (.+?)\s*$/m.exec(e.text);
+  const a = von ? (/<([^>]+)>/.exec(von[1]) || [, von[1]])[1] : '';
+  return a.trim().toLowerCase();
+}
+
+const titelVon = (text) => ((/^# (.+)$/m.exec(text) || [])[1] || '(ohne Betreff)').trim();
+
+function protokollZeile(alt, datum, wer, aenderung) {
+  const monat = datum.slice(0, 7);
+  const kopf = alt || `# Änderungsprotokoll ${monat}\n\n| Datum | Wer | Änderung |\n| --- | --- | --- |\n`;
+  return kopf.replace(/\n*$/, '\n') + `| ${datum} | ${wer} | ${aenderung} |\n`;
+}
+
+async function eingangLaden() {
+  let dateien = [];
+  try { dateien = await gh(`/repos/${zustand.repo}/contents/eingang`); } catch (e) {
+    if (!e.message.startsWith('GitHub 404')) throw e;
+  }
+  const md = dateien.filter((d) => d.type === 'file' && d.name.endsWith('.md') && d.name !== 'README.md');
+  const eintraege = await Promise.all(md.map(async (d) => {
+    const { text } = await dateiLesen(d.path);
+    try { return { pfad: d.path, ...notizLesen(text) }; } catch { return null; }
+  }));
+  return eintraege.filter(Boolean).sort((a, b) => String(b.meta.erstellt).localeCompare(String(a.meta.erstellt)));
+}
+
+async function zeigeEingang() {
+  const liste = $('#eingang-liste');
+  liste.textContent = 'Lade …';
+  let eintraege;
+  try {
+    await stammdatenLaden();
+    if (!zustand.regeln) {
+      const d = await dateiLesen(REGEL_DATEI);
+      zustand.regeln = JSON.parse(d.text);
+      zustand.regelSha = d.sha;
+    }
+    eintraege = await eingangLaden();
+  } catch (e) { liste.textContent = ''; melde(e.message, 'fehler'); return; }
+  liste.textContent = '';
+  if (!eintraege.length) {
+    const p = document.createElement('p');
+    p.className = 'gut';
+    p.textContent = 'Nichts offen. Alles eingeordnet.';
+    liste.append(p);
+  }
+  for (const e of eintraege) liste.append(eingangKarte(e));
+  zeigeVerworfen();
+}
+
+function auswahlFelder(vorgabe) {
+  const box = document.createElement('div');
+  const reihe = document.createElement('div');
+  reihe.className = 'reihe';
+  const thema = document.createElement('select');
+  thema.add(new Option('– Thema wählen –', ''));
+  for (const [k, t] of Object.entries(zustand.themen)) thema.add(new Option(t.name || k, k, false, k === vorgabe.thema));
+  const uo = document.createElement('input');
+  uo.value = vorgabe.unterordner || '';
+  uo.placeholder = 'z. B. firma/rechnungen/{jahr}';
+  const l1 = document.createElement('label'); l1.append('Thema', thema);
+  const l2 = document.createElement('label'); l2.append('Unterordner', uo);
+  reihe.append(l1, l2);
+  const personen = document.createElement('fieldset');
+  personen.innerHTML = '<legend>Personen</legend>';
+  const aktiv = vorgabe.personen && vorgabe.personen.length ? vorgabe.personen : (zustand.regeln.standard_personen || []);
+  for (const [k, p] of Object.entries(zustand.personen)) {
+    const l = document.createElement('label');
+    const c = document.createElement('input');
+    c.type = 'checkbox'; c.value = k; c.checked = aktiv.includes(k);
+    l.append(c, ' ' + (p.name || k));
+    personen.append(l);
+  }
+  box.append(reihe, personen);
+  box.wert = () => ({
+    thema: thema.value,
+    unterordner: uo.value.trim(),
+    personen: [...personen.querySelectorAll('input:checked')].map((c) => c.value),
+  });
+  return box;
+}
+
+function eingangKarte(e) {
+  const karte = document.createElement('div');
+  karte.className = 'karte';
+  const h = document.createElement('h3');
+  h.textContent = titelVon(e.text);
+  const info = document.createElement('div');
+  info.className = 'hinweis';
+  info.textContent = `${e.meta.erstellt} · ${absenderAdresse(e) || 'unbekannt'} · ${e.meta.quelle}`;
+  karte.append(h, info);
+
+  const v = e.meta.vorschlag;
+  const vb = document.createElement('div');
+  vb.className = 'vorschlag';
+  if (v && v.thema) {
+    const k = Math.round((v.konfidenz || 0) * 100);
+    const t = (zustand.themen[v.thema] || {}).name || v.thema;
+    vb.innerHTML = '<span class="konfidenz"></span> <span class="was"></span><div class="hinweis grund"></div>';
+    vb.querySelector('.konfidenz').textContent = `Vorschlag (${k} %):`;
+    vb.querySelector('.was').textContent = [t, v.unterordner].filter(Boolean).join(' / ') + ` · ${(v.personen || []).join(', ')}`;
+    vb.querySelector('.grund').textContent = v.grund || '';
+  } else {
+    vb.textContent = 'Kein Vorschlag. ' + (e.meta.offen_grund || '');
+  }
+  karte.append(vb);
+
+  const felder = auswahlFelder(v || {});
+  const fehler = document.createElement('p');
+  fehler.className = 'fehler';
+  const tun = (fn) => async () => {
+    fehler.textContent = '';
+    karte.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    try { await fn(); } catch (err) { fehler.textContent = err.message; }
+    karte.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+  };
+  const knoepfe = document.createElement('div');
+  knoepfe.append(
+    knopf(v && v.thema ? 'Übernehmen' : 'Ablegen', tun(async () => {
+      const w = felder.wert();
+      const f = auswahlPruefen(w);
+      if (f) { fehler.textContent = f; return; }
+      await eingangAblegen(e, w, 'manuell');
+      karte.remove();
+    }), ''),
+    knopf('Regel aus dieser Mail', () => regelAusMail(e, felder.wert()), 'leise'),
+    knopf('Nur Index', tun(async () => { await eingangVerwerfen(e, false); karte.remove(); }), 'leise'),
+    knopf('Spam', tun(async () => { await eingangVerwerfen(e, true); karte.remove(); }), 'leise'),
+  );
+  const details = document.createElement('details');
+  const summary = document.createElement('summary');
+  summary.textContent = 'Mail anzeigen';
+  const pre = document.createElement('pre');
+  pre.textContent = e.text.replace(/^# .*\n+/, '');
+  details.append(summary, pre);
+  karte.append(felder, knoepfe, fehler, details);
+  return karte;
+}
+
+function auswahlPruefen(w) {
+  if (!(w.thema in zustand.themen)) return 'Bitte ein Thema wählen.';
+  if (!w.personen.length) return 'Mindestens eine Person wählen.';
+  if (!unterordnerGueltig(w.unterordner)) return 'Unterordner ungültig (keine leeren Teile, kein ..).';
+  return '';
+}
+
+// Eingang -> Notiz unter notizen/<jahr>/<thema>/, mit Protokollzeile, ein Commit.
+async function eingangAblegen(e, w, durch) {
+  const meta = { ...e.meta };
+  const datum = String(meta.erstellt);
+  delete meta.offen_grund;
+  delete meta.vorschlag;
+  delete meta.konfidenz;
+  const thema = zustand.themen[w.thema] || {};
+  meta.themen = [w.thema];
+  meta.personen = w.personen;
+  meta.ablage = [jahrOrdner(datum), thema.ablage, unterordnerEinsetzen(w.unterordner, datum)].filter(Boolean).join('/');
+  meta.eingeordnet_durch = durch;
+  if (!meta.absender && absenderAdresse(e)) meta.absender = absenderAdresse(e);
+  const ziel = `notizen/${datum.slice(0, 4)}/${w.thema}/${meta.id}.md`;
+  const heute = new Date().toISOString().slice(0, 10);
+  const protokoll = `protokoll/${heute.slice(0, 7)}.md`;
+  await commitMehrere(async () => [
+    { pfad: ziel, text: notizSchreiben(meta, e.text) },
+    { pfad: e.pfad, loeschen: true },
+    { pfad: protokoll, text: protokollZeile(await dateiOderLeer(protokoll), heute, durch, `Notiz \`${meta.id}\` aus Eingang abgelegt`) },
+  ], `eingang: ${meta.id} -> ${w.thema} (Web)`);
+  melde(`Abgelegt unter ${meta.ablage}.`, 'gut');
+}
+
+// Eingang -> Indexeintrag; bei Spam zusaetzlich Absender in die Verwerfen-Liste.
+async function eingangVerwerfen(e, spam) {
+  const adresse = absenderAdresse(e);
+  const datum = String(e.meta.erstellt);
+  const index = `index/mail/${datum.slice(0, 7)}.jsonl`;
+  const kurz = e.text.replace(/^# .*\n+/, '').replace(/^(Von|Datum|Anhänge): .*$/gm, '').split(/\s+/).join(' ').trim().slice(0, 300);
+  const zeile = { datum, konto: e.meta.quelle, absender: adresse, betreff: titelVon(e.text), kurz, message_id: e.meta.message_id || '' };
+  if (spam) zeile.verworfen = 'manuell: Spam';
+  await commitMehrere(async () => {
+    const aenderungen = [
+      { pfad: index, text: (await dateiOderLeer(index)) + JSON.stringify(zeile) + '\n' },
+      { pfad: e.pfad, loeschen: true },
+    ];
+    if (spam && adresse) {
+      const regeln = JSON.parse((await dateiLesen(REGEL_DATEI)).text);
+      if (!regeln.verwerfen.includes(adresse)) regeln.verwerfen.push(adresse);
+      aenderungen.push({ pfad: REGEL_DATEI, text: JSON.stringify(regeln, null, 2) + '\n' });
+      zustand.regeln = null;
+    }
+    return aenderungen;
+  }, `eingang: ${e.meta.id} ${spam ? 'als Spam verworfen' : 'nur Index'} (Web)`);
+  melde(spam ? `Verworfen; künftige Mails von ${adresse} werden aussortiert.` : 'In den Index verschoben.', 'gut');
+}
+
+async function regelAusMail(e, w) {
+  const adresse = absenderAdresse(e);
+  const domain = adresse.split('@')[1] || adresse;
+  const name = domain.split('.').slice(-2, -1)[0] || domain;
+  await zeigeReiter('regeln');
+  zustand.regelVonMail = e;
+  regelFormular(-1, { name, absender: [domain], thema: w.thema, unterordner: w.unterordner, personen: w.personen });
+  $('#regel-form-titel').textContent = `Neue Regel aus Mail „${titelVon(e.text)}“`;
+  melde('Prüfe die Regel. Beim Speichern wird auch diese Mail abgelegt.');
+}
+
+async function zeigeVerworfen() {
+  const tbody = $('#verworfen-liste');
+  tbody.textContent = '';
+  const monat = new Date().toISOString().slice(0, 7);
+  const text = await dateiOderLeer(`index/mail/${monat}.jsonl`).catch(() => '');
+  const zeilen = text.split('\n').filter(Boolean).map((z) => { try { return JSON.parse(z); } catch { return null; } })
+    .filter((z) => z && z.verworfen).reverse().slice(0, 30);
+  for (const z of zeilen) {
+    const r = tbody.insertRow();
+    zelle(r, z.datum); zelle(r, z.absender); zelle(r, z.betreff); zelle(r, z.verworfen, 'hinweis');
+  }
+  if (!zeilen.length) zelle(tbody.insertRow(), 'Nichts verworfen.', 'hinweis');
+}
+
 // Regeln
 
 async function stammdatenLaden() {
@@ -175,9 +469,10 @@ async function zeigeRegeln() {
   $('#regel-form').hidden = true;
 }
 
-function regelFormular(index) {
+function regelFormular(index, vorlage) {
   const f = $('#regel-form');
-  const r = index >= 0 ? zustand.regeln.regeln[index] : { personen: zustand.regeln.standard_personen || [] };
+  const r = index >= 0 ? zustand.regeln.regeln[index] : (vorlage || { personen: zustand.regeln.standard_personen || [] });
+  if (!vorlage) zustand.regelVonMail = null;
   zustand.bearbeitet = index;
   $('#regel-form-titel').textContent = index >= 0 ? 'Regel ändern' : 'Neue Regel';
   f.name.value = r.name || '';
@@ -214,6 +509,7 @@ function regelPruefen(regel, alle, index) {
   if (!regel.absender && !regel.betreff) return 'Mindestens Absender oder Betreff angeben.';
   if (!(regel.thema in zustand.themen)) return 'Thema unbekannt.';
   if (!regel.personen || !regel.personen.length) return 'Mindestens eine Person wählen.';
+  if (!unterordnerGueltig(regel.unterordner)) return 'Unterordner ungültig (keine leeren Teile, kein ..).';
   return '';
 }
 
@@ -239,6 +535,12 @@ async function regelAbsenden(ereignis) {
   else zustand.regeln.regeln.push(regel);
   try {
     await regelnSpeichern(`regeln: ${regel.name} ${zustand.bearbeitet >= 0 ? 'geändert' : 'neu'} (Web)`);
+    const mail = zustand.regelVonMail;
+    zustand.regelVonMail = null;
+    if (mail) {
+      await eingangAblegen(mail, regel, 'regel/' + regel.name);
+      melde(`Regel ${regel.name} gespeichert und Mail abgelegt.`, 'gut');
+    }
   } catch (e) { $('#regel-fehler').textContent = e.message; }
 }
 
@@ -342,7 +644,7 @@ function starten() {
   $('#reiter').hidden = false;
   $('#abmelden').hidden = false;
   $('#repo-name').textContent = zustand.repo;
-  zeigeReiter(lade('sb-reiter') || 'zugang');
+  zeigeReiter(lade('sb-reiter') || 'eingang');
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -355,7 +657,7 @@ document.addEventListener('DOMContentLoaded', () => {
     else melde('Name nur aus A–Z, 0–9 und _.', 'fehler');
   });
   $('#regel-neu').addEventListener('click', () => regelFormular(-1));
-  $('#regel-abbrechen').addEventListener('click', () => { $('#regel-form').hidden = true; });
+  $('#regel-abbrechen').addEventListener('click', () => { $('#regel-form').hidden = true; zustand.regelVonMail = null; });
   $('#regel-form').addEventListener('submit', regelAbsenden);
   $('#verwerfen-speichern').addEventListener('click', verwerfenSpeichern);
   $('#datei-wahl').addEventListener('change', zeigeDatei);
