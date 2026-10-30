@@ -41,8 +41,28 @@ Das automatische Ablegen, Verschlagworten, Verknüpfen und Zusammenfassen eines 
 _Avoid_: Verarbeiten, Taggen
 
 **Regel**:
-Eine feste, ohne KI ausführbare Vorschrift, wie ein bestimmter **Eingang** eingeordnet wird (z. B. „Absender ionos → Thema EDV“). Die KI schlägt neue **Regeln** vor, wenn sie wiederholt Gleiches einordnet.
+Eine feste, ohne KI ausführbare Vorschrift, wie ein bestimmter **Eingang** eingeordnet wird (z. B. „Absender ionos → Thema EDV“). Sie gilt immer (**Konfidenz** 1,0). Harald legt **Regeln** an einer konkreten Mail an, nicht vorab.
 _Avoid_: Route, Filter, Automatismus
+
+**Konfidenz**:
+Wie sicher eine Einordnung ist, von 0 bis 1. Ab der **Schwelle** (Standard 0,8) wird ohne Rückfrage abgelegt, darunter landet der **Eingang** mit **Vorschlag** bei Harald.
+_Avoid_: Score, Wahrscheinlichkeit
+
+**Vorschlag**:
+Thema, Unterordner und Personen, die das System für einen **Eingang** unterhalb der **Schwelle** annimmt, mit **Konfidenz** und Begründung. Harald übernimmt, ändert oder verwirft ihn; seine Entscheidung wird zur **Notiz**, aus der die **Heuristik** lernt.
+_Avoid_: Empfehlung, Prognose
+
+**Heuristik**:
+Einordnen ohne **Regel** und ohne KI, aus vorhandenen **Notizen** (gleicher Absender, gleiche Domain), dem **Ablagewissen** und Stichwörtern der Themen.
+_Avoid_: Machine Learning, Klassifikator
+
+**Ablagewissen**:
+Bekannte Gegenparteien aus der Drive-Ablage und früheren Steuererklärungen (z. B. „HUK, Hausrat → Versicherungen/01HUK_Hausrat“). Liefert **Vorschläge**, legt aber allein nichts ab.
+_Avoid_: Stammdaten, Mapping
+
+**Spam-Wert**:
+Wie sehr eine Mail nach Werbung oder Spam aussieht, von 0 bis 1, aus Merkmalen im Mail-Kopf (Abmeldelink, Massenversand, Spam-Markierung des Anbieters, Gmail-Kategorie) und Betreff. Ab der Spam-Schwelle wird verworfen; die Mail bleibt als **Indexeintrag** mit Grund auffindbar.
+_Avoid_: Spam-Score, Junk
 
 **Umbau**:
 Eine strukturelle Änderung über viele **Notizen** hinweg (Themen zusammenlegen, archivieren, Duplikate auflösen); braucht Haralds Freigabe.
@@ -58,7 +78,7 @@ _Avoid_: Log
 - Ein **Adapter** erzeugt **Eingänge**; **Einordnen** macht aus einem **Eingang** genau eine **Notiz**.
 - Eine **Notiz** hat null oder ein **Original**.
 - Eine **Notiz** gehört mindestens einer **Person**.
-- **Einordnen** versucht zuerst eine **Regel**; nur wenn keine passt, ordnet die KI ein.
+- **Einordnen** läuft in Stufen: **Regel**, **Spam-Wert**, **Heuristik**, optional KI. Die erste Stufe mit genügend **Konfidenz** entscheidet; sonst entsteht ein **Vorschlag**.
 - Jedes **Einordnen** und jeder **Umbau** erzeugt Einträge im **Änderungsprotokoll**.
 
 ## Flagged ambiguities

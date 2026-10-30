@@ -15,7 +15,7 @@ Dieses Repo enthält **nur Code** und keine persönlichen Daten, Einstellungen o
 | `web/` | Web-App: Zugangsdaten (als GitHub-Secrets), Regeln, Einstellungen, Abläufe; läuft auf GitHub Pages |
 | `beispiel-daten/` | Minimales Daten-Repo als Vorlage und für Tests |
 
-Vorhanden: Mail-Adapter (IMAP, z. B. GMX und Gmail). Geplant: Adapter für Banken, Drive und Web, KI-Einordnen über OpenRouter, Drive-Sicherung, Web-App.
+Vorhanden: Mail-Adapter (IMAP, z. B. GMX und Gmail) mit Einordnen in Stufen (Regel, Spam-Wert, Heuristik, optional KI über OpenRouter) und Web-App. Geplant: Adapter für Banken, Drive und Web, Drive-Sicherung.
 
 ## Benutzung
 
@@ -23,7 +23,7 @@ Vorhanden: Mail-Adapter (IMAP, z. B. GMX und Gmail). Geplant: Adapter für Banke
 pip install -e '.[test]'
 pytest
 second-brain pruefen beispiel-daten
-second-brain regel beispiel-daten "billing@hoster-beispiel.de" "Ihre Rechnung" --anhang
+second-brain einordnen beispiel-daten "billing@hoster-beispiel.de" "Ihre Rechnung" --anhang rechnung.pdf
 second-brain mail-abruf beispiel-daten --konto test --eml ordner-mit-eml-dateien
 MAIL_USER=… MAIL_PASSWORD=… second-brain mail-abruf <daten-repo> --konto gmx --host imap.gmx.net
 ```

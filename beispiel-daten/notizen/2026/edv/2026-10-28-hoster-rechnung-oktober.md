@@ -5,6 +5,7 @@ quelle: mail
 personen: [anna]
 themen: [edv]
 ablage: 0-2026/31 EDV/hoster
+absender: billing@hoster-beispiel.de
 eingeordnet_durch: regel/hoster
 ---
 
