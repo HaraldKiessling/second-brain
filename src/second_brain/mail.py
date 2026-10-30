@@ -68,6 +68,7 @@ class Bilanz:
     notiz: int = 0
     offen: int = 0
     doppelt: int = 0
+    eintraege: list = field(default_factory=list)  # neue Notizen und Eingaenge
 
     def __str__(self):
         return ('%d Notizen, %d offen, %d Index, %d verworfen, %d schon bekannt'
@@ -325,9 +326,32 @@ def verarbeiten(mails, ablage, regelwerk, lerner=None, einst=None, ki=None):
             bilanz.doppelt += 1
             continue
         e = eo.einordnen(mail, regelwerk, lerner, einst, ki)
-        ablage.ablegen(mail, e)
+        pfad = ablage.ablegen(mail, e)
         setattr(bilanz, e.aktion, getattr(bilanz, e.aktion) + 1)
+        if e.aktion in (regeln.NOTIZ, regeln.OFFEN):
+            bilanz.eintraege.append({
+                'aktion': e.aktion, 'pfad': os.path.relpath(pfad, ablage.wurzel),
+                'titel': mail.betreff.strip(), 'absender': eo.adresse(mail.absender),
+                'thema': e.thema or (e.vorschlag.thema if e.vorschlag else ''),
+                'durch': e.durch or (e.vorschlag.durch if e.vorschlag else ''),
+                'konfidenz': round(e.konfidenz, 2), 'grund': e.grund})
     return bilanz
+
+
+def lauf_protokollieren(wurzel, konto, bilanz, jetzt=None):
+    """Ergebnis eines Abrufs fuer die Uebersicht der Web-App festhalten
+    (protokoll/laeufe/<jahr>-<monat>.jsonl). Laeufe ohne neue Mails nicht."""
+    zahlen = {k: getattr(bilanz, k) for k in ('notiz', 'offen', 'index', 'verwerfen')}
+    if not any(zahlen.values()):
+        return None
+    jetzt = jetzt or datetime.datetime.now(datetime.timezone.utc)
+    pfad = os.path.join(wurzel, 'protokoll', 'laeufe', jetzt.strftime('%Y-%m') + '.jsonl')
+    os.makedirs(os.path.dirname(pfad), exist_ok=True)
+    zeile = dict(zeit=jetzt.isoformat(timespec='seconds'), konto=konto, **zahlen,
+                 eintraege=bilanz.eintraege)
+    with open(pfad, 'a', encoding='utf-8') as fh:
+        fh.write(json.dumps(zeile, ensure_ascii=False) + '\n')
+    return pfad
 
 
 def status_laden(wurzel, konto):
