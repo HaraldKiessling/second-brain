@@ -1,7 +1,7 @@
 # Einstellungen fuer das Einordnen (alle Werte optional, hier die Standardwerte).
 schwelle: 0.8        # ab dieser Konfidenz wird ohne Rueckfrage abgelegt
-vorschlag_ab: 0.5    # darunter landet eine Mail ohne Dokument nur im Index
-spam_schwelle: 0.7   # ab diesem Spam-Wert wird verworfen (bleibt im Index sichtbar)
+spam_schwelle: 0.6   # ab diesem Spam-Wert wird verworfen (bleibt im Index sichtbar)
+eigene_adressen: []   # Mails von diesen Adressen (an dich selbst) werden immer erfasst
 ki:
   aktiv: false       # true: unsichere Mails zusaetzlich der KI zeigen (Secret OPENROUTER_API_KEY)
   modell: mistralai/mistral-small-3.2-24b-instruct

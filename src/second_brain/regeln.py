@@ -2,7 +2,9 @@
 
 Reihenfolge (siehe Anforderung F7/F8):
   1. verwerfen   - Spam/Newsletter-Muster in Absender oder Betreff
-  2. notiz       - eine Regel passt (Absender- und/oder Betreff-Muster)
+  2. notiz       - eine Regel passt (Absender- und/oder Betreff-Muster) und
+                   die Mail hat ein Dokument; ohne Dokument nur mit
+                   "ohne_anhang": true in der Regel, sonst Indexeintrag
   3. offen       - Versicherer mit Dokument-Anhang (Sparte aus dem Betreff),
                    oder unbekannt mit Dokument-Anhang -> KI ordnet spaeter ein
   4. index       - alles andere wird nur als Indexeintrag erfasst
@@ -44,22 +46,32 @@ def _sparte(betreff, sparten):
     return ''
 
 
-def einordnen(absender, betreff, hat_dokument, regelwerk):
-    """Ergebnis fuer einen Mail-Eingang nach dem Regelwerk (regeln/mail.json)."""
+def einordnen(absender, betreff, hat_dokument, regelwerk, empfaenger=''):
+    """Ergebnis fuer einen Mail-Eingang nach dem Regelwerk (regeln/mail.json).
+
+    Eine Regel kann Muster fuer absender, empfaenger (An/Cc) und betreff haben;
+    alle angegebenen muessen passen.
+    """
     ab = (absender or '').lower()
     be = (betreff or '').lower()
+    an = (empfaenger or '').lower()
 
     for m in regelwerk.get('verwerfen', []):
         if m.lower() in ab or m.lower() in be:
             return Ergebnis(VERWERFEN, 'Spam/Newsletter: ' + m)
 
     for r in regelwerk.get('regeln', []):
-        if not r.get('absender') and not r.get('betreff'):
+        if not (r.get('absender') or r.get('betreff') or r.get('empfaenger')):
             continue
         if r.get('absender') and not _trifft(r['absender'], ab):
             continue
+        if r.get('empfaenger') and not _trifft(r['empfaenger'], an):
+            continue
         if r.get('betreff') and not _trifft(r['betreff'], be):
             continue
+        if not hat_dokument and not r.get('ohne_anhang'):
+            return Ergebnis(INDEX, 'Regel %s, aber kein Dokument' % r['name'],
+                            regel=r['name'], thema=r['thema'])
         return Ergebnis(NOTIZ, 'Regel ' + r['name'], regel=r['name'],
                         thema=r['thema'], unterordner=r.get('unterordner', ''),
                         personen=list(r.get('personen') or

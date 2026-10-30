@@ -96,8 +96,8 @@ def test_zweiter_lauf_erkennt_bekannte_mails(repo):
 
 
 def test_gleicher_titel_bekommt_eigene_id(repo):
-    lauf(repo, [roh('billing@hoster-beispiel.de', 'Rechnung', mid='<1@x>'),
-                roh('billing@hoster-beispiel.de', 'Rechnung', mid='<2@x>')])
+    lauf(repo, [roh('billing@hoster-beispiel.de', 'Rechnung', anhang='r.pdf', mid='<1@x>'),
+                roh('billing@hoster-beispiel.de', 'Rechnung', anhang='r.pdf', mid='<2@x>')])
     ordner = os.path.join(repo, 'notizen', '2026', 'edv')
     assert '2026-10-28-hoster-beispiel-rechnung-2.md' in os.listdir(ordner)
     assert daten.pruefen(repo) == []

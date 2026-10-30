@@ -31,7 +31,7 @@ def _einordnen(args):
     from . import einordnen, mail
     m = mail.Mail(message_id='', datum=datetime.date.today(), absender=args.absender,
                   betreff=args.betreff, text='',
-                  anhaenge=[(n, b'') for n in args.anhang or []])
+                  anhaenge=[(n, b'') for n in args.anhang or []], empfaenger=args.an or '')
     einst = daten.einstellungen(args.daten)
     e = einordnen.einordnen(m, daten.regelwerk(args.daten), daten.lerner(args.daten), einst)
     print('%s, Konfidenz %.2f (%s)' % (e.aktion, e.konfidenz, e.grund))
@@ -86,6 +86,7 @@ def main(argv=None):
     rg.add_argument('betreff')
     rg.add_argument('--anhang', action='append', metavar='DATEINAME',
                     help='Dateiname eines Anhangs, mehrfach moeglich')
+    rg.add_argument('--an', help='Empfaenger (An/Cc)')
     rg.set_defaults(fn=_einordnen)
 
     ma = sub.add_parser('mail-abruf', help='Mails abholen und ablegen (IMAP oder .eml-Ordner)')
