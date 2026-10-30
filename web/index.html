@@ -58,14 +58,16 @@
 
     <section id="regeln" class="reiter" hidden>
       <h2>Regeln für Mails</h2>
-      <p>Passt eine Regel auf Absender oder Betreff, wird die Mail ohne KI zur Notiz. Muster sind Wortteile, Groß-/Kleinschreibung egal.</p>
-      <table><thead><tr><th>Name</th><th>Absender enthält</th><th>Betreff enthält</th><th>Thema</th><th>Personen</th><th></th></tr></thead><tbody id="regel-liste"></tbody></table>
+      <p>Passt eine Regel auf Absender, Empfänger oder Betreff (alle angegebenen müssen passen), wird eine Mail mit Dokument ohne KI zur Notiz. Muster sind Wortteile, Groß-/Kleinschreibung egal.</p>
+      <table><thead><tr><th>Name</th><th>Absender enthält</th><th>Empfänger enthält</th><th>Betreff enthält</th><th>Thema</th><th>Personen</th><th></th></tr></thead><tbody id="regel-liste"></tbody></table>
       <button id="regel-neu">Neue Regel</button>
       <form id="regel-form" hidden>
         <h3 id="regel-form-titel">Regel</h3>
         <label>Name <input name="name" required></label>
         <label>Absender enthält (mit Komma trennen) <input name="absender"></label>
+        <label>Empfänger (An/Cc) enthält (mit Komma trennen) <input name="empfaenger"></label>
         <label>Betreff enthält (mit Komma trennen) <input name="betreff"></label>
+        <label><input type="checkbox" name="ohne_anhang" style="display:inline;width:auto"> auch Mails ohne Anhang als Notiz ablegen</label>
         <label>Thema <select name="thema" required></select></label>
         <label>Unterordner in der Ablage <input name="unterordner" placeholder="z. B. ionos/rechnungen/{jahr}"></label>
         <fieldset><legend>Personen</legend><div id="regel-personen"></div></fieldset>

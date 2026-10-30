@@ -459,6 +459,7 @@ async function zeigeRegeln() {
     const z = tbody.insertRow();
     zelle(z, r.name);
     zelle(z, (r.absender || []).join(', '));
+    zelle(z, (r.empfaenger || []).join(', '));
     zelle(z, (r.betreff || []).join(', '));
     zelle(z, (zustand.themen[r.thema] || {}).name || r.thema);
     zelle(z, (r.personen || zustand.regeln.standard_personen || []).join(', '));
@@ -478,6 +479,8 @@ function regelFormular(index, vorlage) {
   f.name.value = r.name || '';
   f.absender.value = (r.absender || []).join(', ');
   f.betreff.value = (r.betreff || []).join(', ');
+  f.empfaenger.value = (r.empfaenger || []).join(', ');
+  f.ohne_anhang.checked = !!r.ohne_anhang;
   f.unterordner.value = r.unterordner || '';
   f.thema.textContent = '';
   for (const [schluessel, t] of Object.entries(zustand.themen)) {
@@ -506,7 +509,7 @@ const liste = (text) => text.split(',').map((s) => s.trim().toLowerCase()).filte
 function regelPruefen(regel, alle, index) {
   if (!regel.name) return 'Name fehlt.';
   if (alle.some((r, i) => i !== index && r.name === regel.name)) return 'Name ist schon vergeben.';
-  if (!regel.absender && !regel.betreff) return 'Mindestens Absender oder Betreff angeben.';
+  if (!regel.absender && !regel.betreff && !regel.empfaenger) return 'Mindestens Absender, Empfänger oder Betreff angeben.';
   if (!(regel.thema in zustand.themen)) return 'Thema unbekannt.';
   if (!regel.personen || !regel.personen.length) return 'Mindestens eine Person wählen.';
   if (!unterordnerGueltig(regel.unterordner)) return 'Unterordner ungültig (keine leeren Teile, kein ..).';
@@ -525,7 +528,9 @@ async function regelAbsenden(ereignis) {
   const f = $('#regel-form');
   const regel = { name: f.name.value.trim().toLowerCase().replace(/\s+/g, '-') };
   if (liste(f.absender.value).length) regel.absender = liste(f.absender.value);
+  if (liste(f.empfaenger.value).length) regel.empfaenger = liste(f.empfaenger.value);
   if (liste(f.betreff.value).length) regel.betreff = liste(f.betreff.value);
+  if (f.ohne_anhang.checked) regel.ohne_anhang = true;
   regel.thema = f.thema.value;
   if (f.unterordner.value.trim()) regel.unterordner = f.unterordner.value.trim();
   regel.personen = [...$('#regel-personen').querySelectorAll('input:checked')].map((c) => c.value);

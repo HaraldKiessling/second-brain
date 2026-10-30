@@ -24,7 +24,23 @@ def test_regel_nach_absender(regelwerk):
     assert (e.aktion, e.thema, e.unterordner, e.personen) == (regeln.NOTIZ, 'edv', 'hoster', ['anna'])
 
 
-def test_regel_greift_auch_ohne_anhang(regelwerk):
+def test_regel_ohne_dokument_nur_index(regelwerk):
+    e = regeln.einordnen('billing@hoster-beispiel.de', 'Ihr Login-Code', False, regelwerk)
+    assert (e.aktion, e.regel) == (regeln.INDEX, 'hoster')
+    assert e.grund == 'Regel hoster, aber kein Dokument'
+
+
+def test_regel_nach_empfaenger(regelwerk):
+    regelwerk['regeln'].append({'name': 'uschi', 'empfaenger': ['uschi@'], 'thema': 'steuer',
+                                'personen': ['ben']})
+    e = regeln.einordnen('bank@x.de', 'Depotauszug', True, regelwerk, 'Uschi <uschi@mail.de>')
+    assert (e.aktion, e.regel) == (regeln.NOTIZ, 'uschi')
+    assert regeln.einordnen('bank@x.de', 'Depotauszug', True, regelwerk,
+                            'anna@mail.de').aktion == regeln.OFFEN
+
+
+def test_regel_ohne_anhang_wenn_ausdruecklich_erlaubt(regelwerk):
+    regelwerk['regeln'][0]['ohne_anhang'] = True
     e = regeln.einordnen('billing@hoster-beispiel.de', 'Wartung', False, regelwerk)
     assert e.aktion == regeln.NOTIZ
 

@@ -10,7 +10,13 @@ Stufen (die erste, die sicher genug ist, gewinnt):
                     Stichwoerter der Themen
   4. KI           - optional (config/einordnen.yaml ki.aktiv), nur wenn die
                     Heuristik nicht reicht
-  5. Rueckfrage   - unter der Schwelle: Eingang mit Vorschlag, sonst Index
+  5. Rueckfrage   - unter der Schwelle: Eingang mit Vorschlag
+
+Notiz oder Eingang wird nur eine Mail mit Dokument-Anhang (wie in der
+bisherigen Ablage); ohne Dokument bleibt es beim Indexeintrag, es sei denn,
+eine Regel erlaubt es ausdruecklich (ohne_anhang: true) oder die Mail kommt
+von einer eigenen Adresse (eigene_adressen): was Harald sich selbst schickt,
+will er erfasst haben.
 
 Die Einstellungen stehen in config/einordnen.yaml (siehe STANDARD).
 """
@@ -28,8 +34,8 @@ from . import regeln
 
 STANDARD = {
     'schwelle': 0.8,       # ab dieser Konfidenz ohne Rueckfrage ablegen
-    'vorschlag_ab': 0.5,   # darunter ohne Dokument nur Indexeintrag
-    'spam_schwelle': 0.7,  # ab diesem Spam-Wert verwerfen
+    'spam_schwelle': 0.6,  # ab diesem Spam-Wert verwerfen (bleibt im Index sichtbar)
+    'eigene_adressen': [],  # Mails von hier werden immer erfasst (an sich selbst gesendet)
     'ki': {'aktiv': False, 'modell': '', 'max_pro_lauf': 20},
 }
 
@@ -40,7 +46,16 @@ FREEMAIL = {'gmail.com', 'googlemail.com', 'gmx.de', 'gmx.net', 'gmx.at', 'web.d
 
 WERBEWOERTER = ('newsletter', 'angebot', 'rabatt', 'gutschein', 'sale', 'deal',
                 'gratis', 'gewinnspiel', 'exklusiv', 'nur heute', 'black friday',
-                'sparen sie', '% auf', 'jetzt zugreifen', 'webinar')
+                'sparen sie', '% auf', 'jetzt zugreifen', 'webinar', 'vorteil',
+                'last chance', 'jetzt sichern', 'neuigkeiten', 'entdecken',
+                'nicht verpassen', 'gratulieren sie')
+
+# Absender, wie sie Versandsysteme fuer Werbung benutzen (Teil vor dem @
+# oder Subdomain): news@, newsletter@, promotion@, info@mail.firma.de, ...
+WERBE_ABSENDER = re.compile(
+    r'(^|[.@-])(news|newsletter|promo|promotion|marketing|angebote|aktion|deals?|'
+    r'mailing|kampagne|campaign|hello|hallo|e-?mails?|info|mail|m|em|email|e|t)[.@]')
+EMOJI = re.compile('[\U0001F300-\U0001FAFF\u2600-\u27BF]')
 
 SPAM_KOEPFE = ('x-spam-flag', 'x-spam', 'x-spam-status', 'x-ui-filterresults',
                'x-gmx-antispam')
@@ -107,6 +122,12 @@ def spam_wert(kopf, absender, betreff, hat_dokument=False, bekannt=False,
     if treffer:
         wert += 0.2
         gruende.append('Werbewort: ' + treffer[0])
+    if WERBE_ABSENDER.search(adresse(absender)):
+        wert += 0.15
+        gruende.append('Werbe-Absender')
+    if EMOJI.search(betreff or ''):
+        wert += 0.1
+        gruende.append('Emoji im Betreff')
     if hat_dokument:
         wert -= 0.3
         gruende.append('hat Dokument')
@@ -176,8 +197,11 @@ class Lerner:
     eines Ablagewissen-Vorschlags, sonst zwei gleiche Entscheidungen.
     """
 
-    def __init__(self, beispiele, themen, standard_personen=(), wissen=()):
+    def __init__(self, beispiele, themen, standard_personen=(), wissen=(), eigene=()):
         self.themen = themen
+        # Eigene Adressen sagen nichts ueber das Thema: daraus nicht lernen
+        eigene = {e.lower() for e in eigene}
+        beispiele = [b for b in beispiele if b.adresse not in eigene]
         self.standard_personen = list(standard_personen)
         self.wissen = list(wissen)
         self.nach_adresse = {}
@@ -280,7 +304,7 @@ class KI:
         with urllib.request.urlopen(req, timeout=60) as antwort:
             return json.load(antwort)
 
-    def _prompt(self, absender, betreff, text, anhaenge):
+    def _prompt(self, absender, betreff, text, anhaenge, empfaenger=''):
         themen = '\n'.join('- %s: %s' % (s, t.get('zweck') or t.get('name', s))
                            for s, t in self.themen.items())
         return (
@@ -290,11 +314,11 @@ class KI:
             '"unterordner": "<kurzer Pfad, z. B. firma/rechnungen, oder leer>", '
             '"personen": ["<slug>"], "spam": true/false, '
             '"konfidenz": <0 bis 1>, "grund": "<ein Satz>"}\n\n'
-            'Absender: %s\nBetreff: %s\nAnhaenge: %s\n\n%s'
-            % (themen, ', '.join(sorted(self.personen)), absender, betreff,
+            'Absender: %s\nEmpfaenger: %s\nBetreff: %s\nAnhaenge: %s\n\n%s'
+            % (themen, ', '.join(sorted(self.personen)), absender, empfaenger, betreff,
                ', '.join(anhaenge) or 'keine', (text or '')[:1500]))
 
-    def frage(self, absender, betreff, text, anhaenge=()):
+    def frage(self, absender, betreff, text, anhaenge=(), empfaenger=''):
         """Vorschlag oder None (Budget aufgebraucht, Fehler, unbrauchbare Antwort)."""
         if self.rest <= 0:
             return None
@@ -303,7 +327,8 @@ class KI:
             antwort = self._senden({
                 'model': self.modell,
                 'messages': [{'role': 'user',
-                              'content': self._prompt(absender, betreff, text, anhaenge)}],
+                              'content': self._prompt(absender, betreff, text, anhaenge,
+                                                      empfaenger)}],
                 'response_format': {'type': 'json_object'},
                 'temperature': 0,
             })
@@ -341,17 +366,26 @@ def unterordner_gueltig(uo):
 
 def einordnen(mail, regelwerk, lerner, einst, ki=None):
     """Ergebnis fuer eine Mail (mail.Mail) nach allen Stufen."""
-    regel = regeln.einordnen(mail.absender, mail.betreff, mail.hat_dokument, regelwerk)
+    eigen = adresse(mail.absender) in {e.lower() for e in einst['eigene_adressen']}
+    wichtig = mail.hat_dokument or eigen
+    regel = regeln.einordnen(mail.absender, mail.betreff, wichtig, regelwerk,
+                             mail.empfaenger)
     if regel.aktion in (regeln.VERWERFEN, regeln.NOTIZ):
         regel.durch = 'regel/' + regel.regel if regel.regel else 'regel/verwerfen'
         return regel
 
     spam, gruende = spam_wert(mail.kopf, mail.absender, mail.betreff, mail.hat_dokument,
                               lerner.kennt(mail.absender), mail.kategorie)
-    if spam >= einst['spam_schwelle']:
+    if spam >= einst['spam_schwelle'] and not eigen:
         return regeln.Ergebnis(regeln.VERWERFEN, 'Spam-Wert %.2f: %s'
                                % (spam, ', '.join(gruende)),
                                konfidenz=spam, durch='heuristik/spam')
+
+    if not wichtig:
+        grund = regel.grund
+        if regel.regel:
+            grund = 'Regel %s, aber kein Dokument' % regel.regel
+        return regeln.Ergebnis(regeln.INDEX, grund, spam=spam)
 
     vorschlag = lerner.vorschlag(mail.absender, mail.betreff,
                                  [n for n, _ in mail.anhaenge])
@@ -361,10 +395,9 @@ def einordnen(mail, regelwerk, lerner, einst, ki=None):
     if not versicherung and sicher(vorschlag):
         return _notiz(vorschlag)
 
-    if (ki is not None and not versicherung
-            and (mail.hat_dokument or vorschlag is not None)):
+    if ki is not None and not versicherung:
         kv = ki.frage(mail.absender, mail.betreff, mail.text,
-                      [n for n, _ in mail.anhaenge])
+                      [n for n, _ in mail.anhaenge], mail.empfaenger)
         if kv is not None and not kv.thema and kv.konfidenz >= einst['schwelle']:
             return regeln.Ergebnis(regeln.VERWERFEN, kv.grund,
                                    konfidenz=kv.konfidenz, durch=kv.durch)
@@ -374,17 +407,14 @@ def einordnen(mail, regelwerk, lerner, einst, ki=None):
                                             or kv.konfidenz > vorschlag.konfidenz):
             vorschlag = kv
 
-    if mail.hat_dokument or versicherung or (
-            vorschlag is not None and vorschlag.konfidenz >= einst['vorschlag_ab']):
-        if versicherung or vorschlag is None:
-            grund = regel.grund
-        else:
-            grund = 'Konfidenz %.2f unter Schwelle %.2f' % (vorschlag.konfidenz,
-                                                          einst['schwelle'])
-        return regeln.Ergebnis(regeln.OFFEN, grund, vorschlag=vorschlag,
-                               konfidenz=vorschlag.konfidenz if vorschlag else 0.0)
-
-    return regeln.Ergebnis(regeln.INDEX, regel.grund, spam=spam)
+    if eigen and vorschlag is None:
+        grund = 'an dich selbst gesendet'
+    elif versicherung or vorschlag is None:
+        grund = regel.grund
+    else:
+        grund = 'Konfidenz %.2f unter Schwelle %.2f' % (vorschlag.konfidenz, einst['schwelle'])
+    return regeln.Ergebnis(regeln.OFFEN, grund, vorschlag=vorschlag,
+                           konfidenz=vorschlag.konfidenz if vorschlag else 0.0)
 
 
 def _notiz(v):

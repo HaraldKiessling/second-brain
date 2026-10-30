@@ -43,7 +43,7 @@ def lerner(wurzel, quelle='mail'):
     th = themen(wurzel)
     return einordnen.Lerner(einordnen.beispiele_aus_notizen(notiz_pfade(wurzel), th), th,
                             regelwerk(wurzel, quelle).get('standard_personen', []),
-                            ablagewissen(wurzel))
+                            ablagewissen(wurzel), einstellungen(wurzel)['eigene_adressen'])
 
 
 def regelwerk(wurzel, quelle='mail'):
@@ -109,7 +109,7 @@ def pruefen(wurzel):
             fehler.append((rel, 'Eintrag %d: Unterordner ungueltig' % i))
 
     e = einstellungen(wurzel)
-    for k in ('schwelle', 'vorschlag_ab', 'spam_schwelle'):
+    for k in ('schwelle', 'spam_schwelle'):
         if not isinstance(e[k], (int, float)) or not 0 <= e[k] <= 1:
             fehler.append(('config/einordnen.yaml', '%s muss zwischen 0 und 1 liegen' % k))
     if e['ki']['aktiv'] and not e['ki']['modell']:
