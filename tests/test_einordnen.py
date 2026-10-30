@@ -92,7 +92,7 @@ def test_transaktionsmail_mit_abmeldelink_bleibt(repo):
 def test_eine_fruehere_notiz_ergibt_vorschlag(repo):
     notiz_ablegen(repo, 'n1', 'post@praxis.de', 'versicherungen',
                   '0-2026/08Versicherungen/praxis/2026')
-    b = lauf(repo, [m('Praxis <post@praxis.de>', 'Befund')])
+    b = lauf(repo, [m('Praxis <post@praxis.de>', 'Befund', anhang='befund.pdf')])
     assert b.offen == 1
     v = eingang(repo)[0].meta['vorschlag']
     assert v['thema'] == 'versicherungen'
@@ -153,6 +153,44 @@ def test_ablagewissen_mehrdeutig_gibt_niedrige_konfidenz(repo):
 
 def test_ohne_dokument_und_ohne_vorschlag_nur_index(repo):
     assert lauf(repo, [m('freund@mail.de', 'Grillen')]).index == 1
+
+
+def test_ohne_dokument_nie_eingang_oder_notiz(repo):
+    for i in (1, 2, 3):
+        notiz_ablegen(repo, 'n%d' % i, 'post@praxis.de', 'versicherungen', '0-2026/08Versicherungen')
+    b = lauf(repo, [m('post@praxis.de', 'Ihr Login-Code 1234'),
+                    m('Service <service@versicherung-beispiel.de>', 'Tipps zur Hausrat')])
+    assert (b.index, b.notiz, b.offen) == (2, 0, 0)
+
+
+def test_an_sich_selbst_gesendet_wird_immer_erfasst(repo):
+    with open(os.path.join(repo, 'config', 'einordnen.yaml'), 'w') as fh:
+        yaml.safe_dump({'eigene_adressen': ['anna@mail.de']}, fh)
+    notiz_ablegen(repo, 'n1', 'anna@mail.de', 'edv', '0-2026/31 EDV')
+    notiz_ablegen(repo, 'n2', 'anna@mail.de', 'edv', '0-2026/31 EDV')
+    b = lauf(repo, [m('Anna <anna@mail.de>', 'Merken: Termin Steuerberater',
+                      kopf={'list-unsubscribe': 'x'})])
+    assert b.offen == 1
+    e = eingang(repo)[0].meta
+    assert e['offen_grund'] == 'an dich selbst gesendet' and 'vorschlag' not in e
+
+
+def test_kleines_bild_ist_kein_dokument():
+    logo = m('a@b.de', 'Hallo')
+    logo.anhaenge = [('logo.png', b'x' * 2000)]
+    scan = m('a@b.de', 'Scan')
+    scan.anhaenge = [('scan.jpg', b'x' * 200_000)]
+    assert not logo.hat_dokument and scan.hat_dokument
+
+
+def test_werbe_absender_und_emoji_zaehlen():
+    wert, gruende = eo.spam_wert({'list-unsubscribe': 'x'}, 'Hotel <info@mail.hotel.de>',
+                                 '🍂 Goldener Herbst')
+    assert wert >= 0.6 and 'Werbe-Absender' in gruende and 'Emoji im Betreff' in gruende
+
+
+def test_rechnungsabsender_ist_keine_werbung():
+    assert eo.spam_wert({}, 'IONOS <rechnung@ionos.de>', 'Ihre Rechnung')[0] == 0
 
 
 # --- KI --------------------------------------------------------------------
@@ -220,7 +258,7 @@ def test_schwelle_ist_einstellbar(repo):
     with open(os.path.join(repo, 'config', 'einordnen.yaml'), 'w') as fh:
         yaml.safe_dump({'schwelle': 0.6}, fh)
     notiz_ablegen(repo, 'n1', 'post@praxis.de', 'versicherungen', '0-2026/08Versicherungen')
-    assert lauf(repo, [m('post@praxis.de', 'Befund')]).notiz == 1
+    assert lauf(repo, [m('post@praxis.de', 'Befund', anhang='b.pdf')]).notiz == 1
 
 
 def test_pruefen_meldet_falsches_ablagewissen(repo):

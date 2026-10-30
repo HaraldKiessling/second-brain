@@ -49,7 +49,7 @@ Regeln für Mails liegen im Daten-Repo unter `regeln/mail.json`. Ablauf und Must
 
 ## Einordnen in Stufen
 
-`src/second_brain/einordnen.py` entscheidet für jede Mail: Regel, Spam-Wert, Heuristik, optional KI. Einstellbar sind Schwelle, Spam-Schwelle und KI in `config/einordnen.yaml`, das Ablagewissen steht in `config/ablagewissen.yaml` (Beispiele in `beispiel-daten/config/`). Wie eine Mail eingeordnet würde, zeigt:
+`src/second_brain/einordnen.py` entscheidet für jede Mail: Regel, Spam-Wert, Heuristik, optional KI. Notiz oder Eingang wird nur eine Mail mit Dokument-Anhang (Bilder unter 50 KB zählen nicht, das sind Logos); ohne Dokument bleibt es beim Indexeintrag. Ausnahmen: eine Regel mit `"ohne_anhang": true` und Mails von `eigene_adressen` (was du dir selbst schickst). Regeln können Absender, Empfänger (An/Cc) und Betreff prüfen; alle angegebenen Muster müssen passen. Einstellbar sind Schwelle, Spam-Schwelle und KI in `config/einordnen.yaml`, das Ablagewissen steht in `config/ablagewissen.yaml` (Beispiele in `beispiel-daten/config/`). Wie eine Mail eingeordnet würde, zeigt:
 
 ```
 second-brain einordnen <daten-repo> "IONOS <rechnung@ionos.de>" "Ihre Rechnung" --anhang rechnung.pdf

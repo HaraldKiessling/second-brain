@@ -31,6 +31,8 @@ from . import regeln
 
 DOK_ENDUNGEN = ('.pdf', '.png', '.jpg', '.jpeg', '.csv', '.xls', '.xlsx',
                 '.doc', '.docx', '.txt', '.gif', '.webp', '.tif', '.tiff')
+BILD_ENDUNGEN = ('.png', '.jpg', '.jpeg', '.gif', '.webp')
+BILD_MINDESTGROESSE = 50_000  # kleinere Bilder sind Logos oder Signaturen
 KURZ_LAENGE = 300
 TEXT_LAENGE = 2000
 KOEPFE = ('list-unsubscribe', 'list-id', 'precedence', 'auto-submitted') + eo.SPAM_KOEPFE
@@ -46,11 +48,17 @@ class Mail:
     anhaenge: list = field(default_factory=list)  # [(dateiname, bytes)]
     kopf: dict = field(default_factory=dict)      # ausgewaehlte Kopfzeilen, Namen klein
     kategorie: str = ''                           # Gmail: werbung, sozial
+    empfaenger: str = ''                          # An und Cc
 
     @property
     def hat_dokument(self):
-        return any(os.path.splitext(n)[1].lower() in DOK_ENDUNGEN
-                   for n, _ in self.anhaenge)
+        for n, inhalt in self.anhaenge:
+            endung = os.path.splitext(n)[1].lower()
+            if endung in BILD_ENDUNGEN and len(inhalt) < BILD_MINDESTGROESSE:
+                continue
+            if endung in DOK_ENDUNGEN:
+                return True
+        return False
 
 
 @dataclass
@@ -100,7 +108,8 @@ def mail_aus_bytes(roh):
                 betreff=str(msg['Subject'] or ''),
                 text=_text_von(msg),
                 anhaenge=anhaenge,
-                kopf={k: str(msg[k]) for k in KOEPFE if msg[k] is not None})
+                kopf={k: str(msg[k]) for k in KOEPFE if msg[k] is not None},
+                empfaenger=', '.join(str(msg[k]) for k in ('To', 'Cc') if msg[k] is not None))
 
 
 def _gmail_kategorien(imap, uids):
