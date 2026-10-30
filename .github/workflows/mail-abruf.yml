@@ -28,12 +28,17 @@ on:
       OPENROUTER_API_KEY:
         description: nur noetig, wenn ki.aktiv in config/einordnen.yaml
         required: false
+      DRIVE_TOKEN:
+        description: rclone-Token des Agentenkontos; ohne ihn bleiben Anhaenge nur Artefakt
+        required: false
 
 jobs:
   abruf:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      MIT_DRIVE: ${{ secrets.DRIVE_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -48,6 +53,20 @@ jobs:
         run: |
           second-brain mail-abruf . --konto "${{ inputs.konto }}" --host "${{ inputs.host }}" \
             --postfach "${{ inputs.postfach }}" --anhaenge "$RUNNER_TEMP/anhaenge"
+      - name: Anhaenge nach Google Drive
+        id: drive
+        if: env.MIT_DRIVE == 'true'
+        # Ein Drive-Fehler soll das Speichern der Mails nicht verhindern;
+        # der Lauf wird am Ende trotzdem rot.
+        continue-on-error: true
+        env:
+          RCLONE_CONFIG_DRIVE_TYPE: drive
+          RCLONE_CONFIG_DRIVE_SCOPE: drive
+          RCLONE_CONFIG_DRIVE_TOKEN: ${{ secrets.DRIVE_TOKEN }}
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/rclone.zip" https://github.com/rclone/rclone/releases/download/v1.68.2/rclone-v1.68.2-linux-amd64.zip
+          unzip -q -j "$RUNNER_TEMP/rclone.zip" '*/rclone' -d "$RUNNER_TEMP/bin"
+          PATH="$RUNNER_TEMP/bin:$PATH" second-brain drive . --anhaenge "$RUNNER_TEMP/anhaenge"
       - run: second-brain regelvorschlaege .
       - run: second-brain pruefen .
       - name: Speichern
@@ -65,3 +84,8 @@ jobs:
           path: ${{ runner.temp }}/anhaenge
           retention-days: 7
           if-no-files-found: ignore
+      - name: Drive-Fehler melden
+        if: steps.drive.outcome == 'failure'
+        run: |
+          echo "::error::Anhaenge konnten nicht nach Google Drive; sie liegen 7 Tage im Artefakt."
+          exit 1

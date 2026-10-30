@@ -51,14 +51,15 @@ class Mail:
     empfaenger: str = ''                          # An und Cc
 
     @property
+    def dokumente(self):
+        """Anhaenge ohne kleine Bilder (Logos, Signaturen)."""
+        return [(n, inhalt) for n, inhalt in self.anhaenge
+                if not (os.path.splitext(n)[1].lower() in BILD_ENDUNGEN
+                        and len(inhalt) < BILD_MINDESTGROESSE)]
+
+    @property
     def hat_dokument(self):
-        for n, inhalt in self.anhaenge:
-            endung = os.path.splitext(n)[1].lower()
-            if endung in BILD_ENDUNGEN and len(inhalt) < BILD_MINDESTGROESSE:
-                continue
-            if endung in DOK_ENDUNGEN:
-                return True
-        return False
+        return any(os.path.splitext(n)[1].lower() in DOK_ENDUNGEN for n, _ in self.dokumente)
 
 
 @dataclass
@@ -235,11 +236,11 @@ class Ablage:
         return nid
 
     def _anhaenge_sichern(self, nid, mail):
-        if not self.anhang_ziel or not mail.anhaenge:
+        if not self.anhang_ziel or not mail.dokumente:
             return
         ziel = os.path.join(self.anhang_ziel, nid)
         os.makedirs(ziel, exist_ok=True)
-        for name, inhalt in mail.anhaenge:
+        for name, inhalt in mail.dokumente:
             with open(os.path.join(ziel, os.path.basename(name)), 'wb') as fh:
                 fh.write(inhalt)
 
@@ -284,6 +285,8 @@ class Ablage:
         nid = self._neue_id(mail)
         meta = {'id': nid, 'erstellt': mail.datum, 'quelle': self.konto,
                 'message_id': mail.message_id, 'absender': eo.adresse(mail.absender)}
+        if mail.dokumente:
+            meta['anhaenge'] = [os.path.basename(n) for n, _ in mail.dokumente]
         if ergebnis.aktion == regeln.NOTIZ:
             thema = self.themen.get(ergebnis.thema, {})
             ablage = '/'.join(t for t in (jahr_ordner(mail.datum, self.heute),
