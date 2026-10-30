@@ -78,8 +78,13 @@ def _mail_abruf(args):
 
 def _drive(args):
     from . import drive
+    url, schluessel = os.environ.get('DRIVE_SKRIPT_URL'), os.environ.get('DRIVE_SCHLUESSEL')
+    if not (url and schluessel):
+        print('DRIVE_SKRIPT_URL und DRIVE_SCHLUESSEL werden benoetigt')
+        return 2
     try:
-        hoch, verschoben = drive.abgleichen(args.daten, args.anhaenge)
+        hoch, verschoben = drive.abgleichen(args.daten, drive.Bruecke(url, schluessel),
+                                            args.anhaenge)
     except drive.DriveFehler as e:
         print(e)
         return 1
