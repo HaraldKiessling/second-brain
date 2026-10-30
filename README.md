@@ -11,7 +11,8 @@ Dieses Repo enthält **nur Code** und keine persönlichen Daten, Einstellungen o
 | `CONTEXT.md` | Glossar: Quelle, Adapter, Eingang, Notiz, Regel, … |
 | `docs/notiz-format.md` | Format einer Notiz und der Regeln |
 | `src/second_brain/` | Notiz-Format, Regel-Engine, Prüfung, Kommandozeile |
-| `.github/workflows/mail-abruf.yml` | wiederverwendbarer Ablauf: Mails abholen, Zugang aus Bitwarden |
+| `.github/workflows/mail-abruf.yml` | wiederverwendbarer Ablauf: Mails abholen |
+| `web/` | Web-App: Zugangsdaten (als GitHub-Secrets), Regeln, Einstellungen, Abläufe; läuft auf GitHub Pages |
 | `beispiel-daten/` | Minimales Daten-Repo als Vorlage und für Tests |
 
 Vorhanden: Mail-Adapter (IMAP, z. B. GMX und Gmail). Geplant: Adapter für Banken, Drive und Web, KI-Einordnen über OpenRouter, Drive-Sicherung, Web-App.
