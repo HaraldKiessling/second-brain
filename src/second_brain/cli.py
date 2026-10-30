@@ -84,7 +84,7 @@ def _drive(args):
         return 2
     try:
         hoch, verschoben = drive.abgleichen(args.daten, drive.Bruecke(url, schluessel),
-                                            args.anhaenge)
+                                            args.anhaenge, nachtragen=args.nachtragen)
     except drive.DriveFehler as e:
         print(e)
         return 1
@@ -135,6 +135,8 @@ def main(argv=None):
     dr = sub.add_parser('drive', help='Anhaenge in die Drive-Ordner hochladen und nachziehen')
     dr.add_argument('daten', help='Pfad zum Daten-Repo')
     dr.add_argument('--anhaenge', help='Verzeichnis mit den Anhaengen des Abrufs')
+    dr.add_argument('--nachtragen', action='store_true',
+                    help='aeltere Notizen ohne Anhangliste aus dem Anhang-Verzeichnis ergaenzen')
     dr.set_defaults(fn=_drive)
 
     args = p.parse_args(argv)

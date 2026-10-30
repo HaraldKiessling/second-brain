@@ -146,3 +146,20 @@ def test_bruecke_folgt_der_umleitung_wie_bei_apps_script():
     assert b.aufruf('pruefen', ordner_ids=['x'])['konto'] == 'agent@gmail.com'
     assert erhalten == [{'aktion': 'pruefen', 'ordner_ids': ['x'], 'schluessel': 'k'}]
     s.server_close()
+
+
+def test_aeltere_notizen_werden_aus_dem_artefakt_nachgetragen(repo, tmp_path):
+    abruf(repo, tmp_path / 'anh', roh('Hoster <billing@hoster-beispiel.de>', 'Rechnung',
+                                      anhang='rechnung.pdf'))
+    nid = '2026-10-28-hoster-rechnung'
+    pfad = os.path.join(repo, 'notizen', '2026', 'edv', nid + '.md')
+    n = notiz(repo, 'notizen', '2026', 'edv', nid + '.md')
+    del n.meta['anhaenge']            # wie vor dem Drive-Upload abgelegt
+    with open(pfad, 'w', encoding='utf-8') as fh:
+        fh.write(nz.schreiben(n))
+    (tmp_path / 'anh' / nid / 'logo.png').write_bytes(b'x' * 100)
+    f = Fake()
+    assert drive.abgleichen(repo, f.bruecke, str(tmp_path / 'anh')) == (0, 0)
+    assert drive.abgleichen(repo, f.bruecke, str(tmp_path / 'anh'), nachtragen=True) == (1, 0)
+    assert [a['name'] for a in f.aufrufe] == ['2026-10-28 rechnung.pdf']
+    assert notiz(repo, 'notizen', '2026', 'edv', nid + '.md').meta['anhaenge'] == ['rechnung.pdf']
