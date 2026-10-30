@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Second Brain</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/libsodium@0.7.15/dist/modules/libsodium.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.15/dist/modules/libsodium-wrappers.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Second Brain</h1>
+    <span id="repo-name"></span>
+    <button id="abmelden" class="leise" hidden>Abmelden</button>
+  </header>
+
+  <main>
+    <section id="anmeldung" hidden>
+      <h2>Anmelden</h2>
+      <p>Die Seite spricht direkt mit GitHub. Dein Token bleibt nur in diesem Browser gespeichert.</p>
+      <label>Daten-Repo <input id="repo" value="HaraldKiessling/second-brain-data"></label>
+      <label>GitHub-Token <input id="token" type="password" autocomplete="off"></label>
+      <p class="hinweis">Fine-grained Token nur für das Daten-Repo, mit den Rechten
+        <em>Contents</em>, <em>Secrets</em> und <em>Actions</em> jeweils „Read and write“.
+        <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Token anlegen</a></p>
+      <button id="anmelden">Anmelden</button>
+      <p id="anmeldung-fehler" class="fehler"></p>
+    </section>
+
+    <nav id="reiter" hidden>
+      <button data-reiter="zugang" class="aktiv">Zugangsdaten</button>
+      <button data-reiter="regeln">Regeln</button>
+      <button data-reiter="dateien">Einstellungen</button>
+      <button data-reiter="ablaeufe">Abläufe</button>
+    </nav>
+
+    <section id="zugang" class="reiter" hidden>
+      <h2>Zugangsdaten</h2>
+      <p>Werte werden verschlüsselt als GitHub-Secret gespeichert. Danach kann sie nur noch der Ablauf lesen, auch diese Seite nicht.</p>
+      <table><thead><tr><th>Name</th><th>Wofür</th><th>Stand</th><th></th></tr></thead><tbody id="secrets"></tbody></table>
+      <details><summary>Weiteres Secret</summary>
+        <label>Name <input id="secret-neu-name" placeholder="NAME_IN_GROSSBUCHSTABEN"></label>
+        <button id="secret-neu">Wert setzen</button>
+      </details>
+    </section>
+
+    <section id="regeln" class="reiter" hidden>
+      <h2>Regeln für Mails</h2>
+      <p>Passt eine Regel auf Absender oder Betreff, wird die Mail ohne KI zur Notiz. Muster sind Wortteile, Groß-/Kleinschreibung egal.</p>
+      <table><thead><tr><th>Name</th><th>Absender enthält</th><th>Betreff enthält</th><th>Thema</th><th>Personen</th><th></th></tr></thead><tbody id="regel-liste"></tbody></table>
+      <button id="regel-neu">Neue Regel</button>
+      <form id="regel-form" hidden>
+        <h3 id="regel-form-titel">Regel</h3>
+        <label>Name <input name="name" required></label>
+        <label>Absender enthält (mit Komma trennen) <input name="absender"></label>
+        <label>Betreff enthält (mit Komma trennen) <input name="betreff"></label>
+        <label>Thema <select name="thema" required></select></label>
+        <label>Unterordner in der Ablage <input name="unterordner"></label>
+        <fieldset><legend>Personen</legend><div id="regel-personen"></div></fieldset>
+        <button type="submit">Speichern</button>
+        <button type="button" id="regel-abbrechen" class="leise">Abbrechen</button>
+        <p id="regel-fehler" class="fehler"></p>
+      </form>
+      <h3>Verwerfen (Spam, Newsletter)</h3>
+      <p>Ein Muster pro Zeile.</p>
+      <textarea id="verwerfen" rows="8"></textarea>
+      <button id="verwerfen-speichern">Speichern</button>
+    </section>
+
+    <section id="dateien" class="reiter" hidden>
+      <h2>Einstellungen</h2>
+      <label>Datei
+        <select id="datei-wahl">
+          <option>config/personen.yaml</option>
+          <option>config/themen.yaml</option>
+          <option>regeln/mail.json</option>
+        </select>
+      </label>
+      <textarea id="datei-inhalt" rows="22" spellcheck="false"></textarea>
+      <button id="datei-speichern">Speichern</button>
+      <p id="datei-fehler" class="fehler"></p>
+    </section>
+
+    <section id="ablaeufe" class="reiter" hidden>
+      <h2>Abläufe</h2>
+      <p>Ablauf <strong>Mail</strong>: holt Mails von GMX und Gmail ab.</p>
+      <button id="mail-starten">Jetzt starten</button>
+      <table><thead><tr><th>Gestartet</th><th>Status</th><th>Ergebnis</th></tr></thead><tbody id="laeufe"></tbody></table>
+    </section>
+
+    <p id="meldung" role="status"></p>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
