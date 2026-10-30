@@ -48,6 +48,7 @@ jobs:
         run: |
           second-brain mail-abruf . --konto "${{ inputs.konto }}" --host "${{ inputs.host }}" \
             --postfach "${{ inputs.postfach }}" --anhaenge "$RUNNER_TEMP/anhaenge"
+      - run: second-brain regelvorschlaege .
       - run: second-brain pruefen .
       - name: Speichern
         run: |

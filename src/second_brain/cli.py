@@ -71,6 +71,13 @@ def _mail_abruf(args):
     return 0
 
 
+def _regelvorschlaege(args):
+    for v in daten.regelvorschlaege_schreiben(args.daten):
+        print('%s: %s -> %s %s (%s)' % (v['name'], ','.join(v['absender']), v['thema'],
+                                        v.get('unterordner', ''), v['grund']))
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog='second-brain')
     sub = p.add_subparsers(dest='befehl', required=True)
@@ -88,6 +95,11 @@ def main(argv=None):
                     help='Dateiname eines Anhangs, mehrfach moeglich')
     rg.add_argument('--an', help='Empfaenger (An/Cc)')
     rg.set_defaults(fn=_einordnen)
+
+    rv = sub.add_parser('regelvorschlaege',
+                        help='Regelentwuerfe aus gleich eingeordneten Notizen berechnen')
+    rv.add_argument('daten', help='Pfad zum Daten-Repo')
+    rv.set_defaults(fn=_regelvorschlaege)
 
     ma = sub.add_parser('mail-abruf', help='Mails abholen und ablegen (IMAP oder .eml-Ordner)')
     ma.add_argument('daten', help='Pfad zum Daten-Repo')

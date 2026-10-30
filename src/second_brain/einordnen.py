@@ -146,6 +146,7 @@ class Beispiel:
     thema: str
     unterordner: str
     personen: tuple
+    durch: str = ''  # eingeordnet_durch der Notiz
 
 
 def _absender_aus_text(text):
@@ -181,8 +182,38 @@ def beispiele_aus_notizen(pfade, themen):
         jahr = getattr(m.get('erstellt'), 'year', None)
         uo = unterordner_aus_ablage(m.get('ablage'),
                                     themen.get(thema, {}).get('ablage', ''), jahr)
-        beispiele.append(Beispiel(a, n.titel, thema, uo, tuple(m.get('personen') or ())))
+        beispiele.append(Beispiel(a, n.titel, thema, uo, tuple(m.get('personen') or ()),
+                                  str(m.get('eingeordnet_durch') or '')))
     return beispiele
+
+
+def regelvorschlaege(beispiele, regelwerk, eigene=(), abgelehnt=(), mindestens=2):
+    """Regelentwuerfe fuer Absender-Domains, die schon mehrmals gleich
+    eingeordnet wurden (von Harald, Heuristik oder KI), aber noch keine Regel
+    haben. Uneinheitliche Domains bekommen keinen Vorschlag."""
+    eigene = {e.lower() for e in eigene}
+    gruppen = {}
+    for b in beispiele:
+        d = b.adresse.split('@', 1)[-1]
+        if b.durch.startswith('regel/') or b.adresse in eigene or d in FREEMAIL:
+            continue
+        gruppen.setdefault(d, []).append(b)
+    vorschlaege = []
+    for d, gruppe in sorted(gruppen.items()):
+        labels = {(b.thema, b.unterordner, b.personen) for b in gruppe}
+        if len(gruppe) < mindestens or len(labels) != 1 or d in abgelehnt:
+            continue
+        if regeln.einordnen('x@' + d, '', True, regelwerk).aktion == regeln.NOTIZ:
+            continue
+        thema, uo, personen = labels.pop()
+        name = d.rsplit('.', 2)[-2] if d.count('.') else d
+        vorschlag = {'name': name, 'absender': [d], 'thema': thema,
+                     'personen': list(personen),
+                     'grund': '%d Notizen von %s, alle gleich eingeordnet' % (len(gruppe), d)}
+        if uo:
+            vorschlag['unterordner'] = uo
+        vorschlaege.append(vorschlag)
+    return vorschlaege
 
 
 class Lerner:

@@ -12,10 +12,11 @@ const SECRETS = [
   { name: 'OPENROUTER_API_KEY', wofuer: 'KI-Einordnen (optional, einschalten in config/einordnen.yaml)' },
 ];
 const REGEL_DATEI = 'regeln/mail.json';
+const VORSCHLAG_DATEI = 'regeln/mail-vorschlaege.json';
 const MAIL_WORKFLOW = 'mail.yml';
 
 const $ = (sel) => document.querySelector(sel);
-const zustand = { repo: '', token: '', themen: {}, personen: {}, regeln: null, regelSha: '', bearbeitet: -1, regelVonMail: null };
+const zustand = { repo: '', token: '', themen: {}, personen: {}, regeln: null, regelSha: '', bearbeitet: -1, regelVonMail: null, regelVonVorschlag: null };
 
 // --- Speicher (localStorage kann fehlen, z. B. im privaten Modus) ----------
 
@@ -419,6 +420,7 @@ async function regelAusMail(e, w) {
   const name = domain.split('.').slice(-2, -1)[0] || domain;
   await zeigeReiter('regeln');
   zustand.regelVonMail = e;
+  zustand.regelVonVorschlag = null;
   regelFormular(-1, { name, absender: [domain], thema: w.thema, unterordner: w.unterordner, personen: w.personen });
   $('#regel-form-titel').textContent = `Neue Regel aus Mail „${titelVon(e.text)}“`;
   melde('Prüfe die Regel. Beim Speichern wird auch diese Mail abgelegt.');
@@ -468,12 +470,49 @@ async function zeigeRegeln() {
   });
   $('#verwerfen').value = (zustand.regeln.verwerfen || []).join('\n');
   $('#regel-form').hidden = true;
+  await zeigeVorschlaege();
+}
+
+async function zeigeVorschlaege() {
+  const text = await dateiOderLeer(VORSCHLAG_DATEI).catch(() => '');
+  const daten = text ? JSON.parse(text) : { vorschlaege: [] };
+  const tbody = $('#vorschlag-liste');
+  tbody.textContent = '';
+  $('#vorschlag-bereich').hidden = !daten.vorschlaege.length;
+  for (const v of daten.vorschlaege) {
+    const z = tbody.insertRow();
+    zelle(z, v.absender.join(', '));
+    zelle(z, (zustand.themen[v.thema] || {}).name || v.thema);
+    zelle(z, v.unterordner || '');
+    zelle(z, v.grund, 'hinweis');
+    z.insertCell().append(
+      knopf('Übernehmen', () => {
+        regelFormular(-1, v);
+        zustand.regelVonMail = null;
+        zustand.regelVonVorschlag = v;
+      }),
+      knopf('Ablehnen', () => vorschlagErledigt(v, true), 'klein leise'));
+  }
+}
+
+// Vorschlag aus der Liste nehmen; abgelehnte Domains merkt sich der Ablauf.
+async function vorschlagErledigt(v, abgelehnt) {
+  try {
+    const d = await dateiLesen(VORSCHLAG_DATEI);
+    const daten = JSON.parse(d.text);
+    daten.vorschlaege = daten.vorschlaege.filter((x) => x.absender.join() !== v.absender.join());
+    if (abgelehnt) daten.abgelehnt = [...new Set([...(daten.abgelehnt || []), ...v.absender])];
+    await dateiSchreiben(VORSCHLAG_DATEI, JSON.stringify(daten, null, 2) + '\n', d.sha,
+      `regeln: Vorschlag ${v.name} ${abgelehnt ? 'abgelehnt' : 'übernommen'} (Web)`);
+    if (abgelehnt) melde(`Vorschlag ${v.name} abgelehnt.`, 'gut');
+    await zeigeVorschlaege();
+  } catch (e) { melde(e.message, 'fehler'); }
 }
 
 function regelFormular(index, vorlage) {
   const f = $('#regel-form');
   const r = index >= 0 ? zustand.regeln.regeln[index] : (vorlage || { personen: zustand.regeln.standard_personen || [] });
-  if (!vorlage) zustand.regelVonMail = null;
+  if (!vorlage) { zustand.regelVonMail = null; zustand.regelVonVorschlag = null; }
   zustand.bearbeitet = index;
   $('#regel-form-titel').textContent = index >= 0 ? 'Regel ändern' : 'Neue Regel';
   f.name.value = r.name || '';
@@ -542,6 +581,9 @@ async function regelAbsenden(ereignis) {
     await regelnSpeichern(`regeln: ${regel.name} ${zustand.bearbeitet >= 0 ? 'geändert' : 'neu'} (Web)`);
     const mail = zustand.regelVonMail;
     zustand.regelVonMail = null;
+    const vorschlag = zustand.regelVonVorschlag;
+    zustand.regelVonVorschlag = null;
+    if (vorschlag) await vorschlagErledigt(vorschlag, false);
     if (mail) {
       await eingangAblegen(mail, regel, 'regel/' + regel.name);
       melde(`Regel ${regel.name} gespeichert und Mail abgelegt.`, 'gut');
