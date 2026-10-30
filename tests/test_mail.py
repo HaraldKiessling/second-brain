@@ -78,10 +78,12 @@ def test_unbekannt_mit_anhang_landet_im_eingang(repo):
         assert nz.lesen(fh.read()).meta['offen_grund'] == 'unbekannter Absender mit Dokument'
 
 
-def test_spam_wird_nicht_geschrieben(repo):
-    vorher = sorted(os.walk(repo))
+def test_verworfene_mail_bleibt_mit_grund_im_index(repo):
     assert lauf(repo, [roh('news@shop.de', 'Newsletter KW 44')]).verwerfen == 1
-    assert sorted(os.walk(repo)) == vorher
+    assert not os.path.exists(os.path.join(repo, 'eingang'))
+    with open(os.path.join(repo, 'index', 'mail', '2026-10.jsonl'), encoding='utf-8') as fh:
+        zeile = json.loads(fh.readline())
+    assert zeile['verworfen'] == 'Spam/Newsletter: newsletter'
 
 
 def test_zweiter_lauf_erkennt_bekannte_mails(repo):

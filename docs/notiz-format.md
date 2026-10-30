@@ -32,11 +32,25 @@ Verknüpft: [[IONOS]]
 | `themen` | ja | Liste von Schlüsseln aus `config/themen.yaml` |
 | `ablage` | nein | Pfad des Originals in der Drive-Ablage |
 | `original` | nein | Link auf das Original |
-| `eingeordnet_durch` | nein | `regel/<name>`, `ki/<modell>` oder `manuell` |
+| `eingeordnet_durch` | nein | `regel/<name>`, `heuristik/<art>`, `ki/<modell>` oder `manuell` |
+| `konfidenz` | nein | Konfidenz der Einordnung, nur wenn kleiner als 1 |
+| `absender` | nein | Mail-Adresse des Absenders; daraus lernt die Heuristik |
 | `umsaetze` | nein | Verweise auf verknüpfte Umsätze, `<konto>/<datum>/<nr>` |
+
+Die `ablage` darf mehrstufig sein (`0-2026/31 Harald/ionos/rechnungen`). In Regeln und Vorschlägen werden `{jahr}` und `{monat}` im Unterordner durch das Datum der Mail ersetzt.
+
+Ein **Eingang** unter `eingang/` hat dasselbe Format mit leeren `personen` und `themen`, dazu `offen_grund` und, falls vorhanden, `vorschlag` (`thema`, `unterordner`, `personen`, `konfidenz`, `durch`, `grund`).
 
 Weitere Felder sind erlaubt. `second-brain pruefen <daten-repo>` prüft alle Notizen und Regeln.
 
 ## Regeln
 
 Regeln für Mails liegen im Daten-Repo unter `regeln/mail.json`. Ablauf und Muster sind in `src/second_brain/regeln.py` beschrieben; ein vollständiges Beispiel steht in `beispiel-daten/regeln/mail.json`.
+
+## Einordnen in Stufen
+
+`src/second_brain/einordnen.py` entscheidet für jede Mail: Regel, Spam-Wert, Heuristik, optional KI. Einstellbar sind Schwelle, Spam-Schwelle und KI in `config/einordnen.yaml`, das Ablagewissen steht in `config/ablagewissen.yaml` (Beispiele in `beispiel-daten/config/`). Wie eine Mail eingeordnet würde, zeigt:
+
+```
+second-brain einordnen <daten-repo> "IONOS <rechnung@ionos.de>" "Ihre Rechnung" --anhang rechnung.pdf
+```

@@ -1,10 +1,11 @@
 """Kommandozeile: second-brain <befehl> ..."""
 
 import argparse
+import datetime
 import os
 import sys
 
-from . import daten, regeln
+from . import daten
 
 
 def _pruefen(args):
@@ -16,13 +17,28 @@ def _pruefen(args):
     return 1 if fehler else 0
 
 
-def _regel(args):
-    e = regeln.einordnen(args.absender, args.betreff, args.anhang,
-                         daten.regelwerk(args.daten))
-    print('%s (%s)' % (e.aktion, e.grund))
-    if e.thema:
-        print('thema=%s unterordner=%s personen=%s'
-              % (e.thema, e.unterordner, ','.join(e.personen)))
+def _ki(wurzel, einst):
+    """KI-Stufe, wenn in config/einordnen.yaml aktiv und Schluessel gesetzt."""
+    from . import einordnen
+    schluessel = os.environ.get('OPENROUTER_API_KEY')
+    if not (einst['ki']['aktiv'] and schluessel):
+        return None
+    return einordnen.KI(schluessel, einst['ki']['modell'], daten.themen(wurzel),
+                        daten.kontext(wurzel).personen, einst['ki']['max_pro_lauf'])
+
+
+def _einordnen(args):
+    from . import einordnen, mail
+    m = mail.Mail(message_id='', datum=datetime.date.today(), absender=args.absender,
+                  betreff=args.betreff, text='',
+                  anhaenge=[(n, b'') for n in args.anhang or []])
+    einst = daten.einstellungen(args.daten)
+    e = einordnen.einordnen(m, daten.regelwerk(args.daten), daten.lerner(args.daten), einst)
+    print('%s, Konfidenz %.2f (%s)' % (e.aktion, e.konfidenz, e.grund))
+    v = e.vorschlag if e.vorschlag is not None else e
+    if v.thema:
+        print('thema=%s unterordner=%s personen=%s durch=%s'
+              % (v.thema, v.unterordner, ','.join(v.personen), v.durch))
     return 0
 
 
@@ -31,13 +47,15 @@ def _mail_abruf(args):
 
     ablage = mail.Ablage(args.daten, args.konto, anhang_ziel=args.anhaenge)
     regelwerk = daten.regelwerk(args.daten)
+    einst = daten.einstellungen(args.daten)
+    stufen = dict(lerner=daten.lerner(args.daten), einst=einst, ki=_ki(args.daten, einst))
     if args.eml:
         mails = []
         for d in sorted(os.listdir(args.eml)):
             if d.endswith('.eml'):
                 with open(os.path.join(args.eml, d), 'rb') as fh:
                     mails.append(mail.mail_aus_bytes(fh.read()))
-        print('%s: %s' % (args.konto, mail.verarbeiten(mails, ablage, regelwerk)))
+        print('%s: %s' % (args.konto, mail.verarbeiten(mails, ablage, regelwerk, **stufen)))
         return 0
 
     benutzer, passwort = os.environ.get('MAIL_USER'), os.environ.get('MAIL_PASSWORD')
@@ -48,7 +66,7 @@ def _mail_abruf(args):
     mails, neu = mail.imap_abruf(args.host, benutzer, passwort, status,
                                  postfach=args.postfach, start_tage=args.tage)
     print('%s: %d neue Mails, %s' % (args.konto, len(mails),
-                                     mail.verarbeiten(mails, ablage, regelwerk)))
+                                     mail.verarbeiten(mails, ablage, regelwerk, **stufen)))
     mail.status_speichern(args.daten, args.konto, neu)
     return 0
 
@@ -61,12 +79,14 @@ def main(argv=None):
     pr.add_argument('daten', help='Pfad zum Daten-Repo')
     pr.set_defaults(fn=_pruefen)
 
-    rg = sub.add_parser('regel', help='zeigen, wie eine Mail eingeordnet wuerde')
+    rg = sub.add_parser('einordnen', aliases=['regel'],
+                        help='zeigen, wie eine Mail eingeordnet wuerde (ohne KI)')
     rg.add_argument('daten', help='Pfad zum Daten-Repo')
     rg.add_argument('absender')
     rg.add_argument('betreff')
-    rg.add_argument('--anhang', action='store_true', help='Mail hat Dokument-Anhang')
-    rg.set_defaults(fn=_regel)
+    rg.add_argument('--anhang', action='append', metavar='DATEINAME',
+                    help='Dateiname eines Anhangs, mehrfach moeglich')
+    rg.set_defaults(fn=_einordnen)
 
     ma = sub.add_parser('mail-abruf', help='Mails abholen und ablegen (IMAP oder .eml-Ordner)')
     ma.add_argument('daten', help='Pfad zum Daten-Repo')
