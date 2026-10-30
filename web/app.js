@@ -10,6 +10,7 @@ const SECRETS = [
   { name: 'MAIL_GMAIL_USER', wofuer: 'Gmail: Mail-Adresse' },
   { name: 'MAIL_GMAIL_PASSWORD', wofuer: 'Gmail: App-Passwort (Google-Konto → Sicherheit → App-Passwörter)' },
   { name: 'OPENROUTER_API_KEY', wofuer: 'KI-Einordnen (optional, einschalten in config/einordnen.yaml)' },
+  { name: 'DRIVE_TOKEN', wofuer: 'Google Drive des Agentenkontos: Ausgabe von rclone authorize "drive" (optional)' },
 ];
 const REGEL_DATEI = 'regeln/mail.json';
 const VORSCHLAG_DATEI = 'regeln/mail-vorschlaege.json';
