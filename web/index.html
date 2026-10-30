@@ -30,11 +30,21 @@
     </section>
 
     <nav id="reiter" hidden>
-      <button data-reiter="zugang" class="aktiv">Zugangsdaten</button>
+      <button data-reiter="eingang" class="aktiv">Eingang</button>
+      <button data-reiter="zugang">Zugangsdaten</button>
       <button data-reiter="regeln">Regeln</button>
       <button data-reiter="dateien">Einstellungen</button>
       <button data-reiter="ablaeufe">Abläufe</button>
     </nav>
+
+    <section id="eingang" class="reiter" hidden>
+      <h2>Eingang</h2>
+      <p>Mails, bei denen sich das System nicht sicher genug war. Bestätige den Vorschlag oder korrigiere ihn; daraus lernt es für die nächste Mail desselben Absenders.</p>
+      <div id="eingang-liste"></div>
+      <h3>Zuletzt verworfen</h3>
+      <p class="hinweis">Verworfene Mails dieses Monats mit Grund. Steht hier etwas Wichtiges, lege eine Regel für den Absender an.</p>
+      <table><thead><tr><th>Datum</th><th>Absender</th><th>Betreff</th><th>Grund</th></tr></thead><tbody id="verworfen-liste"></tbody></table>
+    </section>
 
     <section id="zugang" class="reiter" hidden>
       <h2>Zugangsdaten</h2>
@@ -57,7 +67,7 @@
         <label>Absender enthält (mit Komma trennen) <input name="absender"></label>
         <label>Betreff enthält (mit Komma trennen) <input name="betreff"></label>
         <label>Thema <select name="thema" required></select></label>
-        <label>Unterordner in der Ablage <input name="unterordner"></label>
+        <label>Unterordner in der Ablage <input name="unterordner" placeholder="z. B. ionos/rechnungen/{jahr}"></label>
         <fieldset><legend>Personen</legend><div id="regel-personen"></div></fieldset>
         <button type="submit">Speichern</button>
         <button type="button" id="regel-abbrechen" class="leise">Abbrechen</button>
@@ -76,6 +86,8 @@
           <option>config/personen.yaml</option>
           <option>config/themen.yaml</option>
           <option>regeln/mail.json</option>
+          <option>config/einordnen.yaml</option>
+          <option>config/ablagewissen.yaml</option>
         </select>
       </label>
       <textarea id="datei-inhalt" rows="22" spellcheck="false"></textarea>

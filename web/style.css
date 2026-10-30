@@ -84,6 +84,14 @@ th { color: var(--leise); font-weight: 500; }
 .fehler { color: var(--fehler); }
 .hinweis { color: var(--leise); font-size: 13px; }
 #meldung { min-height: 1.5em; }
+.karte { border: 1px solid var(--linie); border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+.karte h3 { margin: 0 0 4px; }
+.karte .vorschlag { margin: 8px 0; padding: 8px; background: var(--grund); border-radius: 6px; }
+.karte details { margin-top: 8px; }
+.karte pre { white-space: pre-wrap; font-size: 13px; color: var(--leise); max-height: 12em; overflow: auto; }
+.konfidenz { font-weight: 600; }
+.reihe { display: flex; flex-wrap: wrap; gap: 0 12px; }
+.reihe label { flex: 1 1 200px; }
 
 /* Schmale Bildschirme: Tabellenzeilen als Karten */
 @media (max-width: 600px) {
