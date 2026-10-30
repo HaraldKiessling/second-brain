@@ -25,6 +25,9 @@ on:
         required: true
       MAIL_PASSWORD:
         required: true
+      OPENROUTER_API_KEY:
+        description: nur noetig, wenn ki.aktiv in config/einordnen.yaml
+        required: false
 
 jobs:
   abruf:
@@ -41,6 +44,7 @@ jobs:
         env:
           MAIL_USER: ${{ secrets.MAIL_USER }}
           MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           second-brain mail-abruf . --konto "${{ inputs.konto }}" --host "${{ inputs.host }}" \
             --postfach "${{ inputs.postfach }}" --anhaenge "$RUNNER_TEMP/anhaenge"

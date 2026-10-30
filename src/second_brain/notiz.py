@@ -12,7 +12,7 @@ import yaml
 
 PFLICHTFELDER = ('id', 'erstellt', 'quelle', 'personen', 'themen')
 ID_MUSTER = re.compile(r'^[a-z0-9][a-z0-9-]*$')
-EINGEORDNET_PRAEFIXE = ('regel/', 'ki/', 'manuell')
+EINGEORDNET_PRAEFIXE = ('regel/', 'heuristik/', 'ki/', 'manuell')
 
 
 @dataclass
@@ -95,7 +95,7 @@ def pruefen(notiz, kontext):
 
     durch = m.get('eingeordnet_durch')
     if durch is not None and not str(durch).startswith(EINGEORDNET_PRAEFIXE):
-        fehler.append('eingeordnet_durch muss mit regel/, ki/ oder manuell beginnen')
+        fehler.append('eingeordnet_durch muss mit regel/, heuristik/, ki/ oder manuell beginnen')
 
     if not notiz.titel:
         fehler.append('Ueberschrift "# ..." fehlt')

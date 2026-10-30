@@ -27,6 +27,10 @@ class Ergebnis:
     thema: str = ''
     unterordner: str = ''
     personen: list = field(default_factory=list)
+    konfidenz: float = 1.0
+    durch: str = ''          # wer entschieden hat: regel/<name>, heuristik/..., ki/<modell>
+    vorschlag: object = None  # einordnen.Vorschlag bei offen
+    spam: float = 0.0
 
 
 def _trifft(muster, text):

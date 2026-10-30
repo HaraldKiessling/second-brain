@@ -1,0 +1,21 @@
+# Ablagewissen: bekannte Gegenparteien aus der Drive-Ablage und frueheren
+# Steuererklaerungen. Passt ein Muster auf Absender, Betreff oder Anhangname,
+# entsteht ein Vorschlag (Konfidenz 0,7). Anders als eine Regel legt das
+# Ablagewissen allein nichts ab; nach der ersten Bestaetigung lernt das System.
+eintraege:
+  - name: Versicherung Hausrat
+    muster: [versicherung-beispiel, hausrat]
+    thema: versicherungen
+    unterordner: 01Hausrat
+    quelle: Drive-Ablage
+  - name: Versicherung Haftpflicht
+    muster: [versicherung-beispiel, haftpflicht]
+    thema: versicherungen
+    unterordner: 02Haftpflicht
+    quelle: Drive-Ablage
+  - name: Stadtkasse
+    muster: [stadtkasse, grundsteuer]
+    thema: steuer
+    unterordner: grundsteuer/{jahr}
+    personen: [anna, ben]
+    quelle: Steuererklaerung 2025
