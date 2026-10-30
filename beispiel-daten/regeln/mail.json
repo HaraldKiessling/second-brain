@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "standard_personen": ["anna"],
+  "verwerfen": ["newsletter", "linkedin"],
+  "pruefen": {
+    "absender": ["huk", "allianz"],
+    "sparten": {"Hausrat": ["hausrat"], "KFZ": ["kfz", "auto"]}
+  },
+  "regeln": [
+    {"name": "hoster", "absender": ["hoster-beispiel"], "thema": "edv", "unterordner": "hoster"},
+    {"name": "finanzamt", "betreff": ["steuerbescheid"], "thema": "steuer", "personen": ["anna", "ben"]}
+  ]
+}
