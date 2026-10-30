@@ -61,6 +61,20 @@
       <h2>Zugangsdaten</h2>
       <p>Werte werden verschlüsselt als GitHub-Secret gespeichert. Danach kann sie nur noch der Ablauf lesen, auch diese Seite nicht.</p>
       <table><thead><tr><th>Name</th><th>Wofür</th><th>Stand</th><th></th></tr></thead><tbody id="secrets"></tbody></table>
+      <div id="drive-bereich" class="karte">
+        <h3>Google Drive verbinden</h3>
+        <p class="hinweis">Damit Mail-Anhänge in deinen Drive-Ordnern landen. Einmalig, alles im Browser: Ein kleines Skript im Google-Konto mit Schreibrecht auf die Ordner (Agentenkonto) legt die Dateien ab.</p>
+        <ol>
+          <li>Öffne <a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener">script.google.com</a> mit dem Agentenkonto. Prüfe oben rechts, dass das richtige Konto angemeldet ist.</li>
+          <li>Ersetze den vorhandenen Text durch diesen Code und speichere: <button id="drive-code-kopieren" class="klein">Code kopieren</button>
+            <textarea id="drive-code" readonly rows="5"></textarea></li>
+          <li><b>Bereitstellen → Neue Bereitstellung</b>, Typ <b>Web-App</b>, Ausführen als <b>Ich</b>, Zugriff <b>Jeder</b>. Google fragt nach Berechtigungen: <b>Erweitert → „… öffnen (unsicher)“ → Zulassen</b>. Die Warnung kommt, weil es dein eigenes, ungeprüftes Skript ist; geschützt ist es durch den Schlüssel im Code.</li>
+          <li>Web-App-URL hier einfügen:
+            <input id="drive-url" placeholder="https://script.google.com/macros/s/…/exec">
+            <button id="drive-testen">Testen und speichern</button></li>
+        </ol>
+        <div id="drive-ergebnis" class="hinweis"></div>
+      </div>
       <details><summary>Weiteres Secret</summary>
         <label>Name <input id="secret-neu-name" placeholder="NAME_IN_GROSSBUCHSTABEN"></label>
         <button id="secret-neu">Wert setzen</button>
