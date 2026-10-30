@@ -11,9 +11,10 @@ Dieses Repo enthält **nur Code** und keine persönlichen Daten, Einstellungen o
 | `CONTEXT.md` | Glossar: Quelle, Adapter, Eingang, Notiz, Regel, … |
 | `docs/notiz-format.md` | Format einer Notiz und der Regeln |
 | `src/second_brain/` | Notiz-Format, Regel-Engine, Prüfung, Kommandozeile |
+| `.github/workflows/mail-abruf.yml` | wiederverwendbarer Ablauf: Mails abholen, Zugang aus Bitwarden |
 | `beispiel-daten/` | Minimales Daten-Repo als Vorlage und für Tests |
 
-Geplant: Adapter (GMX, Gmail, Banken, Drive, Web), KI-Einordnen über OpenRouter, Drive-Sicherung, Web-App.
+Vorhanden: Mail-Adapter (IMAP, z. B. GMX und Gmail). Geplant: Adapter für Banken, Drive und Web, KI-Einordnen über OpenRouter, Drive-Sicherung, Web-App.
 
 ## Benutzung
 
@@ -22,6 +23,8 @@ pip install -e '.[test]'
 pytest
 second-brain pruefen beispiel-daten
 second-brain regel beispiel-daten "billing@hoster-beispiel.de" "Ihre Rechnung" --anhang
+second-brain mail-abruf beispiel-daten --konto test --eml ordner-mit-eml-dateien
+MAIL_USER=… MAIL_PASSWORD=… second-brain mail-abruf <daten-repo> --konto gmx --host imap.gmx.net
 ```
 
 ## Lizenz
