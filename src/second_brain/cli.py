@@ -76,6 +76,17 @@ def _mail_abruf(args):
     return 0
 
 
+def _drive(args):
+    from . import drive
+    try:
+        hoch, verschoben = drive.abgleichen(args.daten, args.anhaenge)
+    except drive.DriveFehler as e:
+        print(e)
+        return 1
+    print('Drive: %d Notizen hochgeladen, %d verschoben' % (hoch, verschoben))
+    return 0
+
+
 def _regelvorschlaege(args):
     for v in daten.regelvorschlaege_schreiben(args.daten):
         print('%s: %s -> %s %s (%s)' % (v['name'], ','.join(v['absender']), v['thema'],
@@ -115,6 +126,11 @@ def main(argv=None):
     ma.add_argument('--eml', help='statt IMAP: Ordner mit .eml-Dateien')
     ma.add_argument('--anhaenge', help='Verzeichnis fuer Anhaenge (nicht im Daten-Repo)')
     ma.set_defaults(fn=_mail_abruf)
+
+    dr = sub.add_parser('drive', help='Anhaenge in die Drive-Ordner hochladen und nachziehen')
+    dr.add_argument('daten', help='Pfad zum Daten-Repo')
+    dr.add_argument('--anhaenge', help='Verzeichnis mit den Anhaengen des Abrufs')
+    dr.set_defaults(fn=_drive)
 
     args = p.parse_args(argv)
     return args.fn(args)
