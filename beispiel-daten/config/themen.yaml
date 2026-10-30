@@ -1,0 +1,10 @@
+themen:
+  edv:
+    name: EDV
+    ablage: 31 EDV
+  steuer:
+    name: Steuer
+    ablage: 09Steuer
+  versicherungen:
+    name: Versicherungen
+    ablage: 08Versicherungen
