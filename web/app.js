@@ -10,7 +10,8 @@ const SECRETS = [
   { name: 'MAIL_GMAIL_USER', wofuer: 'Gmail: Mail-Adresse' },
   { name: 'MAIL_GMAIL_PASSWORD', wofuer: 'Gmail: App-Passwort (Google-Konto → Sicherheit → App-Passwörter)' },
   { name: 'OPENROUTER_API_KEY', wofuer: 'KI-Einordnen (optional, einschalten in config/einordnen.yaml)' },
-  { name: 'DRIVE_TOKEN', wofuer: 'Google Drive des Agentenkontos: Ausgabe von rclone authorize "drive" (optional)' },
+  { name: 'DRIVE_SKRIPT_URL', wofuer: 'Google Drive: wird von „Google Drive verbinden“ gesetzt (optional)' },
+  { name: 'DRIVE_SCHLUESSEL', wofuer: 'Google Drive: wird von „Google Drive verbinden“ gesetzt' },
 ];
 const REGEL_DATEI = 'regeln/mail.json';
 const VORSCHLAG_DATEI = 'regeln/mail-vorschlaege.json';
@@ -131,7 +132,7 @@ function zeigeReiter(name) {
   document.querySelectorAll('.reiter').forEach((s) => { s.hidden = s.id !== name; });
   document.querySelectorAll('#reiter button').forEach((b) => b.classList.toggle('aktiv', b.dataset.reiter === name));
   merke('sb-reiter', name);
-  return ({ uebersicht: zeigeUebersicht, eingang: zeigeEingang, zugang: zeigeSecrets, regeln: zeigeRegeln, dateien: zeigeDatei, ablaeufe: zeigeLaeufe })[name]();
+  return ({ uebersicht: zeigeUebersicht, eingang: zeigeEingang, zugang: () => { driveCodeZeigen(); return zeigeSecrets(); }, regeln: zeigeRegeln, dateien: zeigeDatei, ablaeufe: zeigeLaeufe })[name]();
 }
 
 function zelle(zeile, text, klasse) {
@@ -180,6 +181,82 @@ async function secretAbfragen(name) {
     melde('Speichere ' + name + ' …');
     await secretSetzen(name, wert);
     melde(name + ' gespeichert.', 'gut');
+    zeigeSecrets();
+  } catch (e) { melde(e.message, 'fehler'); }
+}
+
+// Google Drive verbinden: Apps-Script im Agentenkonto als Bruecke
+// (drive-bruecke/Code.gs). Der Schluessel wird hier erzeugt, in den Code
+// eingesetzt und nach erfolgreichem Test als Secret gespeichert.
+
+const BRUECKE_CODE = 'https://raw.githubusercontent.com/HaraldKiessling/second-brain/main/drive-bruecke/Code.gs';
+const SCHREIBRECHT = ['EDIT', 'OWNER'];
+
+function driveSchluessel() {
+  let s = lade('sb-drive-schluessel');
+  if (!s) {
+    s = Array.from(crypto.getRandomValues(new Uint8Array(24)), (b) => b.toString(16).padStart(2, '0')).join('');
+    merke('sb-drive-schluessel', s);
+  }
+  return s;
+}
+
+async function driveCodeZeigen() {
+  const feld = $('#drive-code');
+  if (feld.value) return;
+  try {
+    const r = await fetch(BRUECKE_CODE);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    feld.value = (await r.text()).replace('__SCHLUESSEL__', driveSchluessel());
+  } catch (e) { feld.value = 'Code konnte nicht geladen werden: ' + e.message; }
+}
+
+async function driveTesten() {
+  const url = $('#drive-url').value.trim();
+  const erg = $('#drive-ergebnis');
+  erg.className = 'hinweis';
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(url)) {
+    erg.textContent = 'Bitte die Web-App-URL einfügen (beginnt mit https://script.google.com/macros/s/ und endet auf /exec).';
+    return;
+  }
+  erg.textContent = 'Teste …';
+  let a;
+  try {
+    await stammdatenLaden();
+    const jahr = '0-' + new Date().getFullYear();
+    const ids = Object.values(zustand.themen).map((t) => (t.drive || {})[jahr]).filter(Boolean);
+    // text/plain vermeidet die CORS-Vorabfrage, die Apps-Script nicht beantwortet.
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ aktion: 'pruefen', schluessel: driveSchluessel(), ordner_ids: ids }) });
+    a = await r.json();
+  } catch (e) {
+    erg.textContent = `Skript nicht erreichbar. Ist der Zugriff auf „Jeder“ gestellt? (${e.message})`;
+    erg.className = 'fehler';
+    return;
+  }
+  if (!a.ok) {
+    erg.textContent = 'Das Skript meldet: ' + a.fehler + (a.fehler === 'Schluessel falsch' ? '. Bitte den Code oben neu kopieren und neu bereitstellen.' : '');
+    erg.className = 'fehler';
+    return;
+  }
+  const gut = a.ordner.filter((o) => SCHREIBRECHT.includes(o.recht));
+  const schlecht = a.ordner.filter((o) => !gut.includes(o));
+  erg.textContent = `Verbunden als ${a.konto}. ${gut.length} von ${a.ordner.length} Themenordnern beschreibbar.`;
+  if (schlecht.length) {
+    const ul = document.createElement('ul');
+    for (const o of schlecht) {
+      const li = document.createElement('li');
+      li.textContent = `${o.name || o.id}: ${o.fehler || 'nur Leserecht (' + o.recht + ')'}`;
+      ul.append(li);
+    }
+    erg.append(ul);
+  }
+  if (!gut.length) { erg.className = 'fehler'; return; }
+  try {
+    await secretSetzen('DRIVE_SKRIPT_URL', url);
+    await secretSetzen('DRIVE_SCHLUESSEL', driveSchluessel());
+    erg.className = 'gut';
+    melde('Google Drive verbunden. Ab dem nächsten Abruf landen Anhänge in den Ordnern.', 'gut');
     zeigeSecrets();
   } catch (e) { melde(e.message, 'fehler'); }
 }
@@ -814,6 +891,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (/^[A-Z_][A-Z0-9_]*$/.test(name)) secretAbfragen(name);
     else melde('Name nur aus A–Z, 0–9 und _.', 'fehler');
   });
+  $('#drive-code-kopieren').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText($('#drive-code').value); melde('Code kopiert.', 'gut'); } catch {
+      $('#drive-code').select(); melde('Bitte markierten Code kopieren.');
+    }
+  });
+  $('#drive-testen').addEventListener('click', driveTesten);
   $('#regel-neu').addEventListener('click', () => regelFormular(-1));
   $('#regel-abbrechen').addEventListener('click', () => { $('#regel-form').hidden = true; zustand.regelVonMail = null; });
   $('#regel-form').addEventListener('submit', regelAbsenden);

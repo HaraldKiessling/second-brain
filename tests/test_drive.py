@@ -1,3 +1,4 @@
+import base64
 import os
 import shutil
 
@@ -9,6 +10,27 @@ from second_brain import daten, drive, mail, notiz as nz
 from test_mail import BEISPIEL, HEUTE, roh
 
 EDV = 'ID_EDV_2026'
+
+
+class Fake:
+    """Nimmt die Aufrufe an das Apps-Script entgegen."""
+
+    def __init__(self, fehler=None):
+        self.aufrufe, self.fehler = [], fehler
+
+    def __call__(self, daten):
+        if self.fehler:
+            return {'ok': False, 'fehler': self.fehler}
+        daten = dict(daten)
+        assert daten.pop('schluessel') == 'geheim'
+        if 'inhalt' in daten:
+            daten['inhalt'] = base64.b64decode(daten['inhalt'])
+        self.aufrufe.append(daten)
+        return {'ok': True, 'id': 'f1'}
+
+    @property
+    def bruecke(self):
+        return drive.Bruecke('https://script.example/exec', 'geheim', senden=self)
 
 
 @pytest.fixture
@@ -33,26 +55,28 @@ def notiz(repo, *teile):
 
 
 def test_notiz_anhang_geht_in_den_drive_ordner_des_themas(repo, tmp_path):
-    aufrufe = []
+    f = Fake()
     abruf(repo, tmp_path / 'anh', roh('Hoster <billing@hoster-beispiel.de>', 'Rechnung November',
                                       anhang='rechnung.pdf'))
-    assert drive.abgleichen(repo, str(tmp_path / 'anh'), lambda *a: aufrufe.append(a)) == (1, 0)
+    assert drive.abgleichen(repo, f.bruecke, str(tmp_path / 'anh')) == (1, 0)
     nid = '2026-10-28-hoster-rechnung-november'
-    assert aufrufe == [('copyto', str(tmp_path / 'anh' / nid / 'rechnung.pdf'),
-                        'drive,root_folder_id=%s:hoster/2026-10-28 rechnung.pdf' % EDV)]
+    assert f.aufrufe == [{'aktion': 'hochladen', 'ordner_id': EDV, 'pfad': 'hoster',
+                          'name': '2026-10-28 rechnung.pdf', 'inhalt': b'%PDF-1.4 test',
+                          'typ': 'application/pdf'}]
     n = notiz(repo, 'notizen', '2026', 'edv', nid + '.md')
     assert n.meta['anhaenge'] == ['rechnung.pdf'] and n.meta['drive'] == EDV + ':hoster'
     # zweiter Lauf: nichts mehr zu tun
-    assert drive.abgleichen(repo, str(tmp_path / 'anh'), lambda *a: aufrufe.append(a)) == (0, 0)
+    assert drive.abgleichen(repo, f.bruecke, str(tmp_path / 'anh')) == (0, 0)
+    assert len(f.aufrufe) == 1
     assert daten.pruefen(repo) == []
 
 
 def test_eingang_erst_in_sammelordner_dann_nach_einordnen_verschoben(repo, tmp_path):
-    aufrufe = []
+    f = Fake()
     abruf(repo, tmp_path / 'anh', roh('wer@irgendwo.de', 'Vertrag', anhang='vertrag.pdf'))
-    drive.abgleichen(repo, str(tmp_path / 'anh'), lambda *a: aufrufe.append(a))
+    drive.abgleichen(repo, f.bruecke, str(tmp_path / 'anh'))
     nid = '2026-10-28-irgendwo-vertrag'
-    assert aufrufe[0][2] == 'drive:Second Brain Eingang/%s/2026-10-28 vertrag.pdf' % nid
+    assert (f.aufrufe[0]['ordner_id'], f.aufrufe[0]['pfad']) == ('', 'Second Brain Eingang/' + nid)
     # Einordnen wie die Web-App: Notiz mit Ablage, Eingang geloescht
     n = notiz(repo, 'eingang', nid + '.md')
     n.meta.update(themen=['edv'], personen=['anna'], ablage='0-2026/31 EDV/vertraege/2026')
@@ -60,12 +84,11 @@ def test_eingang_erst_in_sammelordner_dann_nach_einordnen_verschoben(repo, tmp_p
     with open(os.path.join(repo, 'notizen', '2026', 'edv', nid + '.md'), 'w', encoding='utf-8') as fh:
         fh.write(nz.schreiben(n))
     os.remove(os.path.join(repo, 'eingang', nid + '.md'))
-    aufrufe.clear()
-    assert drive.abgleichen(repo, None, lambda *a: aufrufe.append(a)) == (0, 1)
-    assert aufrufe == [
-        ('moveto', 'drive:Second Brain Eingang/%s/2026-10-28 vertrag.pdf' % nid,
-         'drive,root_folder_id=%s:vertraege/2026/2026-10-28 vertrag.pdf' % EDV),
-        ('rmdir', 'drive:Second Brain Eingang/%s' % nid)]
+    f.aufrufe.clear()
+    assert drive.abgleichen(repo, f.bruecke) == (0, 1)
+    assert f.aufrufe == [{'aktion': 'verschieben', 'von_id': '', 'von_pfad': 'Second Brain Eingang/' + nid,
+                          'ordner_id': EDV, 'pfad': 'vertraege/2026',
+                          'name': '2026-10-28 vertrag.pdf', 'leeren': True}]
     assert notiz(repo, 'notizen', '2026', 'edv', nid + '.md').meta['drive'] == EDV + ':vertraege/2026'
 
 
@@ -87,12 +110,39 @@ def test_kleine_bilder_werden_nicht_abgelegt():
 
 
 def test_drive_fehler_bricht_nicht_ab_und_wird_gemeldet(repo, tmp_path):
-    import subprocess
-
-    def kaputt(*a):
-        raise subprocess.CalledProcessError(1, ['rclone', *a])
     abruf(repo, tmp_path / 'anh', roh('Hoster <billing@hoster-beispiel.de>', 'Rechnung',
                                       anhang='rechnung.pdf'))
     with pytest.raises(drive.DriveFehler):
-        drive.abgleichen(repo, str(tmp_path / 'anh'), kaputt)
+        drive.abgleichen(repo, Fake('Zugriff verweigert').bruecke, str(tmp_path / 'anh'))
     assert 'drive' not in notiz(repo, 'notizen', '2026', 'edv', '2026-10-28-hoster-rechnung.md').meta
+
+
+def test_bruecke_folgt_der_umleitung_wie_bei_apps_script():
+    import http.server
+    import json
+    import threading
+
+    erhalten = []
+
+    class Server(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            erhalten.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+            self.send_response(302)
+            self.send_header('Location', '/echo')
+            self.end_headers()
+
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"ok": true, "konto": "agent@gmail.com"}')
+
+        def log_message(self, *a):
+            pass
+
+    s = http.server.HTTPServer(('127.0.0.1', 0), Server)
+    threading.Thread(target=s.handle_request).start()
+    threading.Thread(target=s.handle_request).start()
+    b = drive.Bruecke('http://127.0.0.1:%d/exec' % s.server_port, 'k')
+    assert b.aufruf('pruefen', ordner_ids=['x'])['konto'] == 'agent@gmail.com'
+    assert erhalten == [{'aktion': 'pruefen', 'ordner_ids': ['x'], 'schluessel': 'k'}]
+    s.server_close()

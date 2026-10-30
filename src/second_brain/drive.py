@@ -13,12 +13,19 @@ Ort, den die Notiz beschreibt:
 Wo die Dateien gerade liegen, steht als `drive` in der Notiz ("<ordner-id>:
 <pfad>", leere ID = Wurzel des Agentenkontos). Weicht das vom Ziel ab, weil die
 Mail im Eingang eingeordnet oder in der Web-App korrigiert wurde, verschiebt der
-naechste Lauf die Dateien. Hochgeladen wird mit rclone; der Remote heisst
-`drive` und wird ueber RCLONE_CONFIG_DRIVE_* im Workflow konfiguriert.
+naechste Lauf die Dateien.
+
+Geschrieben wird ueber die Drive-Bruecke (drive-bruecke/Code.gs), ein
+Apps-Script im Agentenkonto, das die Web-App beim Einrichten erzeugt. So
+braucht es weder Konsole noch OAuth-Client.
 """
 
+import base64
+import json
+import mimetypes
 import os
-import subprocess
+import urllib.error
+import urllib.request
 
 import yaml
 
@@ -31,8 +38,41 @@ class DriveFehler(Exception):
     pass
 
 
-def _rclone(*args):
-    subprocess.run(['rclone', *args], check=True)
+class Bruecke:
+    """Client fuer das Apps-Script. senden ist fuer Tests austauschbar."""
+
+    def __init__(self, url, schluessel, senden=None):
+        self.url, self.schluessel = url, schluessel
+        self._senden = senden or self._http
+
+    def _http(self, daten):
+        req = urllib.request.Request(self.url, data=json.dumps(daten).encode('utf-8'),
+                                     headers={'Content-Type': 'text/plain;charset=utf-8'})
+        # Apps-Script leitet auf googleusercontent.com um; urllib folgt per GET.
+        with urllib.request.urlopen(req, timeout=120) as antwort:
+            return json.loads(antwort.read().decode('utf-8'))
+
+    def aufruf(self, aktion, **felder):
+        try:
+            antwort = self._senden(dict(felder, aktion=aktion, schluessel=self.schluessel))
+        except (urllib.error.URLError, ValueError) as e:
+            raise DriveFehler('Drive-Bruecke nicht erreichbar: %s' % e)
+        if not antwort.get('ok'):
+            raise DriveFehler(antwort.get('fehler') or 'unbekannter Fehler')
+        return antwort
+
+    def hochladen(self, ort, name, lokal):
+        ordner_id, pfad = teilen(ort)
+        with open(lokal, 'rb') as fh:
+            inhalt = base64.b64encode(fh.read()).decode('ascii')
+        self.aufruf('hochladen', ordner_id=ordner_id, pfad=pfad, name=name, inhalt=inhalt,
+                    typ=mimetypes.guess_type(name)[0] or 'application/octet-stream')
+
+    def verschieben(self, von, nach, name, leeren=False):
+        von_id, von_pfad = teilen(von)
+        ordner_id, pfad = teilen(nach)
+        self.aufruf('verschieben', von_id=von_id, von_pfad=von_pfad, ordner_id=ordner_id,
+                    pfad=pfad, name=name, leeren=leeren)
 
 
 def dateiname(meta, name):
@@ -40,11 +80,10 @@ def dateiname(meta, name):
     return '%s %s' % (meta.get('erstellt'), os.path.basename(name))
 
 
-def remote(ort, name=''):
-    """rclone-Pfad zu einem Ort "<ordner-id>:<pfad>", optional mit Dateiname."""
-    ordner, _, pfad = ort.partition(':')
-    pfad = '/'.join(t for t in (pfad, name) if t)
-    return ('drive,root_folder_id=%s:%s' % (ordner, pfad)) if ordner else 'drive:' + pfad
+def teilen(ort):
+    """"<ordner-id>:<pfad>" -> (ordner_id, pfad)."""
+    ordner_id, _, pfad = ort.partition(':')
+    return ordner_id, pfad
 
 
 def ziel(meta, themen):
@@ -57,7 +96,7 @@ def ziel(meta, themen):
     return ':%s/%s' % (SAMMELORDNER, meta['id'])
 
 
-def abgleichen(wurzel, anhaenge=None, rclone=_rclone):
+def abgleichen(wurzel, bruecke, anhaenge=None):
     """Neue Anhaenge hochladen und verschobene Notizen nachziehen. Liefert (hoch, verschoben)."""
     with open(os.path.join(wurzel, 'config', 'themen.yaml'), encoding='utf-8') as fh:
         themen = (yaml.safe_load(fh) or {}).get('themen', {})
@@ -86,17 +125,16 @@ def abgleichen(wurzel, anhaenge=None, rclone=_rclone):
                         if not (anhaenge and os.path.isdir(lokal)):
                             continue
                         for name in namen:
-                            rclone('copyto', os.path.join(lokal, os.path.basename(name)),
-                                   remote(soll, dateiname(n.meta, name)))
+                            bruecke.hochladen(soll, dateiname(n.meta, name),
+                                              os.path.join(lokal, os.path.basename(name)))
                         hoch += 1
                     else:
-                        for name in namen:
-                            rclone('moveto', remote(ist, dateiname(n.meta, name)),
-                                   remote(soll, dateiname(n.meta, name)))
-                        if ist.startswith(':%s/' % SAMMELORDNER):
-                            rclone('rmdir', remote(ist))
+                        sammel = ist.startswith(':%s/' % SAMMELORDNER)
+                        for i, name in enumerate(namen):
+                            bruecke.verschieben(ist, soll, dateiname(n.meta, name),
+                                                leeren=sammel and i == len(namen) - 1)
                         verschoben += 1
-                except subprocess.CalledProcessError as e:
+                except (DriveFehler, OSError) as e:
                     fehler.append('%s: %s' % (n.meta['id'], e))
                     continue
                 n.meta['drive'] = soll
