@@ -274,3 +274,30 @@ def test_cli_einordnen(capsys):
     aus = capsys.readouterr().out
     assert 'offen, Konfidenz 0.70' in aus
     assert 'thema=versicherungen unterordner=01Hausrat' in aus
+
+
+# --- Regelvorschlaege ------------------------------------------------------
+
+def test_regelvorschlag_aus_gleichen_entscheidungen(repo, capsys):
+    for i in (1, 2):
+        notiz_ablegen(repo, 'p%d' % i, 'info@praxis.de', 'versicherungen',
+                      '0-2026/08Versicherungen/praxis/2026')
+    notiz_ablegen(repo, 'u1', 'a@uneins.de', 'edv', '0-2026/31 EDV')
+    notiz_ablegen(repo, 'u2', 'b@uneins.de', 'steuer', '0-2026/09Steuer')
+    notiz_ablegen(repo, 'g1', 'x@gmail.com', 'edv', '0-2026/31 EDV')
+    notiz_ablegen(repo, 'g2', 'y@gmail.com', 'edv', '0-2026/31 EDV')
+    [v] = daten.regelvorschlaege_schreiben(repo)
+    assert v == {'name': 'praxis', 'absender': ['praxis.de'], 'thema': 'versicherungen',
+                 'unterordner': 'praxis/{jahr}', 'personen': ['anna'],
+                 'grund': '2 Notizen von praxis.de, alle gleich eingeordnet'}
+    assert cli.main(['regelvorschlaege', repo]) == 0
+    assert 'praxis: praxis.de -> versicherungen' in capsys.readouterr().out
+
+
+def test_kein_vorschlag_wenn_regel_schon_greift_oder_abgelehnt(repo):
+    for i in (1, 2):
+        notiz_ablegen(repo, 'h%d' % i, 'billing@hoster-beispiel.de', 'edv', '0-2026/31 EDV/hoster')
+        notiz_ablegen(repo, 'p%d' % i, 'info@praxis.de', 'versicherungen', '0-2026/08Versicherungen')
+    with open(os.path.join(repo, 'regeln', 'mail-vorschlaege.json'), 'w') as fh:
+        json.dump({'abgelehnt': ['praxis.de'], 'vorschlaege': []}, fh)
+    assert daten.regelvorschlaege_schreiben(repo) == []
