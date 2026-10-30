@@ -61,6 +61,11 @@
       <p>Passt eine Regel auf Absender, Empfänger oder Betreff (alle angegebenen müssen passen), wird eine Mail mit Dokument ohne KI zur Notiz. Muster sind Wortteile, Groß-/Kleinschreibung egal.</p>
       <table><thead><tr><th>Name</th><th>Absender enthält</th><th>Empfänger enthält</th><th>Betreff enthält</th><th>Thema</th><th>Personen</th><th></th></tr></thead><tbody id="regel-liste"></tbody></table>
       <button id="regel-neu">Neue Regel</button>
+      <div id="vorschlag-bereich" hidden>
+        <h3>Regelvorschläge</h3>
+        <p class="hinweis">Absender, deren Mails schon mehrmals gleich eingeordnet wurden. Mit einer Regel landen sie künftig ohne Rückfrage.</p>
+        <table><thead><tr><th>Absender</th><th>Thema</th><th>Unterordner</th><th>Warum</th><th></th></tr></thead><tbody id="vorschlag-liste"></tbody></table>
+      </div>
       <form id="regel-form" hidden>
         <h3 id="regel-form-titel">Regel</h3>
         <label>Name <input name="name" required></label>

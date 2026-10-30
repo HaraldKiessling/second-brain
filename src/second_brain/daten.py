@@ -46,6 +46,27 @@ def lerner(wurzel, quelle='mail'):
                             ablagewissen(wurzel), einstellungen(wurzel)['eigene_adressen'])
 
 
+def regelvorschlaege_schreiben(wurzel, quelle='mail'):
+    """regeln/<quelle>-vorschlaege.json neu berechnen; abgelehnte bleiben gemerkt."""
+    from . import einordnen
+    pfad = os.path.join(wurzel, 'regeln', quelle + '-vorschlaege.json')
+    alt = {}
+    if os.path.exists(pfad):
+        with open(pfad, encoding='utf-8') as fh:
+            alt = json.load(fh)
+    th = themen(wurzel)
+    neu = {'abgelehnt': alt.get('abgelehnt', []),
+           'vorschlaege': einordnen.regelvorschlaege(
+               einordnen.beispiele_aus_notizen(notiz_pfade(wurzel), th),
+               regelwerk(wurzel, quelle), einstellungen(wurzel)['eigene_adressen'],
+               alt.get('abgelehnt', []))}
+    if neu != alt:
+        with open(pfad, 'w', encoding='utf-8') as fh:
+            json.dump(neu, fh, ensure_ascii=False, indent=2)
+            fh.write('\n')
+    return neu['vorschlaege']
+
+
 def regelwerk(wurzel, quelle='mail'):
     with open(os.path.join(wurzel, 'regeln', quelle + '.json'), encoding='utf-8') as fh:
         return json.load(fh)
