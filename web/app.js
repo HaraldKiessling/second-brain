@@ -3,13 +3,9 @@
 
 'use strict';
 
-// Bekannte Zugangsdaten. Namen muessen zu den Workflows im Daten-Repo passen.
+// Secrets ohne eigenes Konto-Formular (siehe KONTEN). Namen muessen zu den
+// Workflows im Daten-Repo passen.
 const SECRETS = [
-  { name: 'MAIL_GMX_USER', wofuer: 'GMX: Mail-Adresse' },
-  { name: 'MAIL_GMX_PASSWORD', wofuer: 'GMX: Passwort für IMAP' },
-  { name: 'MAIL_GMAIL_USER', wofuer: 'Gmail: Mail-Adresse' },
-  { name: 'MAIL_GMAIL_PASSWORD', wofuer: 'Gmail: App-Passwort (Google-Konto → Sicherheit → App-Passwörter)' },
-  { name: 'OPENROUTER_API_KEY', wofuer: 'KI-Einordnen (optional, einschalten in config/einordnen.yaml)' },
   { name: 'DRIVE_SKRIPT_URL', wofuer: 'Google Drive: wird von „Google Drive verbinden“ gesetzt (optional)' },
   { name: 'DRIVE_SCHLUESSEL', wofuer: 'Google Drive: wird von „Google Drive verbinden“ gesetzt' },
 ];
@@ -163,28 +159,36 @@ async function zeigeSecrets() {
     vorhanden = (await gh(`/repos/${zustand.repo}/actions/secrets?per_page=100`)).secrets;
   } catch (e) { melde(e.message, 'fehler'); return; }
   const gesetzt = new Map(vorhanden.map((s) => [s.name, s.updated_at]));
-  const liste = [...SECRETS, ...vorhanden.filter((s) => !SECRETS.some((b) => b.name === s.name)).map((s) => ({ name: s.name, wofuer: '' }))];
+  const stand = (name) => (gesetzt.has(name) ? 'gesetzt ' + new Date(gesetzt.get(name)).toLocaleDateString('de-DE') : 'fehlt');
+  for (const k of KONTEN) {
+    const ziel = $('#konto-' + k.id + ' .stand');
+    if (!ziel) continue;
+    const fehlt = (k.nutzer && !gesetzt.has(k.nutzer)) || !gesetzt.has(k.passwort);
+    ziel.textContent = (k.nutzer ? `Adresse ${stand(k.nutzer)}, ` : '') + `${k.feld} ${stand(k.passwort)}`;
+    ziel.className = 'stand ' + (fehlt ? 'warn' : 'gut');
+  }
+  const imKonto = (name) => KONTEN.some((k) => k.nutzer === name || k.passwort === name);
+  const liste = [...SECRETS, ...vorhanden.filter((s) => !imKonto(s.name) && !SECRETS.some((b) => b.name === s.name)).map((s) => ({ name: s.name, wofuer: '' }))];
   for (const s of liste) {
     const z = tbody.insertRow();
     zelle(z, s.name);
     zelle(z, s.wofuer, 'hinweis');
-    const stand = gesetzt.get(s.name);
-    zelle(z, stand ? 'gesetzt ' + new Date(stand).toLocaleDateString('de-DE') : 'fehlt', stand ? 'gut' : 'warn');
-    z.insertCell().append(knopf(stand ? 'Ändern' : 'Setzen', () => secretBearbeiten(s.name)));
+    zelle(z, stand(s.name), gesetzt.has(s.name) ? 'gut' : 'warn');
+    z.insertCell().append(knopf(gesetzt.has(s.name) ? 'Ändern' : 'Setzen', () => secretBearbeiten(s.name)));
   }
 }
 
 // Ein Formular pro Konto mit Nutzername und Passwort, damit der Google
-// Passwortmanager beides ausfuellt. Gespeichert wird nur, wo Chrome das
-// Passwort nicht schon unter einer anderen Seite kennt (GMX-Passwort liegt
-// meist unter gmx.net; doppelt soll es nicht liegen).
+// Passwortmanager beides ausfuellt und nach dem Speichern anbietet, es sich
+// zu merken. Alle Passwoerter hier sind eigene App-Passwoerter bzw.
+// Schluessel, die es sonst nirgends gibt, also liegt nichts doppelt.
 const KONTEN = [
-  { id: 'gmx', titel: 'GMX', feld: 'Passwort', nutzer: 'MAIL_GMX_USER', passwort: 'MAIL_GMX_PASSWORD', typ: 'email', speichern: false,
-    hinweis: 'Ins Passwortfeld tippen und „Andere Passwörter“ wählen, dann den Eintrag von gmx.net nehmen. Nur speichern lassen, wenn es ein eigenes App-Passwort ist.' },
-  { id: 'gmail', titel: 'Gmail', feld: 'App-Passwort', nutzer: 'MAIL_GMAIL_USER', passwort: 'MAIL_GMAIL_PASSWORD', typ: 'email', speichern: true,
-    hinweis: 'Google zeigt ein App-Passwort nur einmal an. Lass es Chrome nach dem Speichern gleich merken.' },
-  { id: 'openrouter', titel: 'OpenRouter', feld: 'Schlüssel', fest: 'OpenRouter', passwort: 'OPENROUTER_API_KEY', speichern: true,
-    hinweis: 'Den Schlüssel zeigt OpenRouter nur einmal an. Lass ihn Chrome nach dem Speichern merken.' },
+  { id: 'gmx', titel: 'GMX', feld: 'App-Passwort', nutzer: 'MAIL_GMX_USER', passwort: 'MAIL_GMX_PASSWORD', typ: 'email',
+    hinweis: 'Nicht dein normales GMX-Passwort: Mit Zwei-Faktor-Anmeldung lässt GMX den Abruf nur mit einem App-Passwort zu. Lege es in den GMX-Sicherheitseinstellungen an. GMX zeigt es nur einmal, lass es Chrome nach dem Speichern merken.' },
+  { id: 'gmail', titel: 'Gmail', feld: 'App-Passwort', nutzer: 'MAIL_GMAIL_USER', passwort: 'MAIL_GMAIL_PASSWORD', typ: 'email',
+    hinweis: 'Nicht dein Google-Passwort, sondern ein App-Passwort (Google-Konto → Sicherheit → App-Passwörter). Google zeigt es nur einmal, lass es Chrome nach dem Speichern merken.' },
+  { id: 'openrouter', titel: 'OpenRouter', feld: 'Schlüssel', fest: 'OpenRouter', passwort: 'OPENROUTER_API_KEY',
+    hinweis: 'Für das KI-Einordnen (optional, einschalten in config/einordnen.yaml). OpenRouter zeigt den Schlüssel nur einmal, lass ihn Chrome nach dem Speichern merken.' },
 ];
 
 function kontenZeigen() {
@@ -206,67 +210,51 @@ function kontoFormular(k) {
   const passwort = document.createElement('input');
   passwort.name = 'password';
   passwort.type = 'password';
-  passwort.autocomplete = k.speichern ? 'new-password' : 'current-password';
-  const haken = document.createElement('input');
-  haken.type = 'checkbox';
-  haken.checked = k.speichern;
+  passwort.autocomplete = 'new-password';
   const hinweis = document.createElement('p');
   hinweis.className = 'hinweis';
   hinweis.textContent = k.hinweis;
+  const stand = document.createElement('p');
+  stand.className = 'stand';
   const knopfSpeichern = document.createElement('button');
   knopfSpeichern.type = 'submit';
   knopfSpeichern.textContent = 'Speichern';
-  form.append(h, beschriftet(k.fest ? 'Nutzername' : 'Mail-Adresse', nutzer), beschriftet(k.feld, passwort),
-    hinweis, beschriftet('Chrome soll das Passwort speichern', haken, 'haken'), knopfSpeichern);
-  form.addEventListener('submit', (e) => { e.preventDefault(); kontoSpeichern(k, form, haken.checked); });
+  form.append(h, stand, beschriftet(k.fest ? 'Nutzername' : 'Mail-Adresse', nutzer), beschriftet(k.feld, passwort),
+    hinweis, knopfSpeichern);
+  form.addEventListener('submit', (e) => { e.preventDefault(); kontoSpeichern(k, form); });
   return form;
 }
 
-function beschriftet(text, feld, klasse) {
+function beschriftet(text, feld) {
   const l = document.createElement('label');
-  if (klasse) { l.className = klasse; l.append(feld, ' ' + text); } else l.append(text + ' ', feld);
+  l.append(text + ' ', feld);
   return l;
 }
 
-async function kontoSpeichern(k, form, speichern) {
+async function kontoSpeichern(k, form) {
   const nutzer = form.elements.username;
   const passwort = form.elements.password;
   const adresse = k.fest ? '' : nutzer.value.trim();
   const wert = passwort.value;
   if (!wert && !adresse) { melde('Bitte Adresse oder Passwort eingeben.', 'fehler'); return; }
-  if (!speichern) {
-    // Feld ersetzen, bevor die Anfrage laeuft: Chrome sieht dann kein
-    // erfolgreich abgeschicktes Passwort und bietet kein Speichern an.
-    const leer = passwort.cloneNode();
-    leer.value = '';
-    passwort.replaceWith(leer);
-  }
   try {
     melde('Speichere ' + k.titel + ' …');
     if (adresse) await secretSetzen(k.nutzer, adresse);
     if (wert) await secretSetzen(k.passwort, wert);
   } catch (e) { melde(e.message, 'fehler'); return; }
   melde(k.titel + ' gespeichert.', 'gut');
-  if (speichern) {
-    // Ausblenden nach erfolgreicher Anfrage ist Chromes Zeichen fuer
-    // „Anmeldung geklappt“, dann bietet er das Speichern an.
-    form.hidden = true;
-    const fertig = document.createElement('div');
-    fertig.className = 'karte';
-    fertig.append(k.titel + ' gespeichert. ', knopf('Erneut ändern', () => { form.remove(); fertig.replaceWith(kontoFormular(k)); }, 'klein'));
-    form.after(fertig);
-    setTimeout(() => form.remove(), 5000);
-  }
+  // Ausblenden nach erfolgreicher Anfrage ist Chromes Zeichen fuer
+  // „Anmeldung geklappt“, dann bietet er das Speichern an.
+  form.hidden = true;
+  const fertig = document.createElement('div');
+  fertig.className = 'karte';
+  fertig.append(k.titel + ' gespeichert. ', knopf('Erneut ändern', () => { form.remove(); fertig.replaceWith(kontoFormular(k)); zeigeSecrets(); }, 'klein'));
+  form.after(fertig);
+  setTimeout(() => form.remove(), 5000);
   zeigeSecrets();
 }
 
 function secretBearbeiten(name) {
-  const konto = KONTEN.find((k) => k.nutzer === name || k.passwort === name);
-  if (konto) {
-    const form = $('#konto-' + konto.id);
-    if (form) { form.scrollIntoView({ behavior: 'smooth' }); form.querySelector(name === konto.nutzer ? '[name=username]' : '[name=password]').focus(); }
-    return;
-  }
   if (name.startsWith('DRIVE_')) { $('#drive-bereich').scrollIntoView({ behavior: 'smooth' }); return; }
   $('#secret-neu-bereich').open = true;
   $('#secret-neu-name').value = name;

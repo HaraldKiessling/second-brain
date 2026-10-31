@@ -87,7 +87,6 @@
       <h2>Zugangsdaten</h2>
       <p>Werte werden verschlüsselt als GitHub-Secret gespeichert. Danach kann sie nur noch der Ablauf lesen, auch diese Seite nicht.</p>
       <div id="konten"></div>
-      <table><thead><tr><th>Name</th><th>Wofür</th><th>Stand</th><th></th></tr></thead><tbody id="secrets"></tbody></table>
       <div id="drive-bereich" class="karte">
         <h3>Google Drive verbinden</h3>
         <p class="hinweis">Damit Mail-Anhänge in deinen Drive-Ordnern landen. Einmalig, alles im Browser: Ein kleines Skript im Google-Konto mit Schreibrecht auf die Ordner (Agentenkonto) legt die Dateien ab.</p>
@@ -102,7 +101,8 @@
         </ol>
         <div id="drive-ergebnis" class="hinweis"></div>
       </div>
-      <details id="secret-neu-bereich"><summary>Weiteres Secret</summary>
+      <details id="secret-neu-bereich"><summary>Weitere Secrets</summary>
+        <table><thead><tr><th>Name</th><th>Wofür</th><th>Stand</th><th></th></tr></thead><tbody id="secrets"></tbody></table>
         <form id="secret-neu-form">
           <label>Name <input id="secret-neu-name" name="username" autocomplete="username" placeholder="NAME_IN_GROSSBUCHSTABEN"></label>
           <label>Wert <input id="secret-neu-wert" name="password" type="password" autocomplete="new-password"></label>
