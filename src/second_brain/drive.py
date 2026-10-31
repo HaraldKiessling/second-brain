@@ -12,8 +12,11 @@ Ort, den die Notiz beschreibt:
 
 Ist `mail_drive` gesetzt (Web-App: "Mail als PDF in Drive"), kommt die Mail
 selbst als PDF dazu: der Abruf oder der Nachholen-Schritt legt sie als
-HTML-Seite in den Anhang-Ordner, die Bruecke wandelt sie um. Ihr Ort steht als
-`mail_pdf`; wird `mail_drive` abgewaehlt, kommt das PDF in den Papierkorb.
+HTML-Seite in den Anhang-Ordner, Chrome im Ablauf druckt sie als PDF, die
+Bruecke laedt es hoch. Ihr Ort steht als `mail_pdf`; wird `mail_drive`
+abgewaehlt, kommt das PDF in den Ordner "Second Brain Papierkorb" des
+Agentenkontos. So kommt die Bruecke mit hochladen und verschieben aus und muss
+fuer neue Funktionen nicht neu bereitgestellt werden.
 
 Wo die Dateien gerade liegen, steht als `drive` in der Notiz ("<ordner-id>:
 <pfad>", leere ID = Wurzel des Agentenkontos). Weicht das vom Ziel ab, weil die
@@ -30,6 +33,9 @@ import json
 import mimetypes
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 import urllib.error
 import urllib.request
 
@@ -39,9 +45,7 @@ from . import mail
 from . import notiz as nz
 
 SAMMELORDNER = 'Second Brain Eingang'
-BRUECKE_ALT = ('Die Drive-Bruecke kennt noch keine PDFs. In der Web-App unter Zugangsdaten '
-               'den Code neu kopieren, im Skript einfuegen und unter Bereitstellen -> '
-               'Bereitstellungen verwalten eine neue Version bereitstellen.')
+PAPIERKORB = 'Second Brain Papierkorb'
 
 
 class DriveFehler(Exception):
@@ -51,9 +55,10 @@ class DriveFehler(Exception):
 class Bruecke:
     """Client fuer das Apps-Script. senden ist fuer Tests austauschbar."""
 
-    def __init__(self, url, schluessel, senden=None):
+    def __init__(self, url, schluessel, senden=None, pdf_drucken=None):
         self.url, self.schluessel = url, schluessel
         self._senden = senden or self._http
+        self._pdf_drucken = pdf_drucken or html_als_pdf
 
     def _http(self, daten):
         req = urllib.request.Request(self.url, data=json.dumps(daten).encode('utf-8'),
@@ -79,22 +84,15 @@ class Bruecke:
                     typ=mimetypes.guess_type(name)[0] or 'application/octet-stream')
 
     def pdf(self, ort, name, lokal_html):
-        """HTML-Seite als PDF ablegen (Umwandlung im Apps-Script)."""
-        ordner_id, pfad = teilen(ort)
-        with open(lokal_html, 'rb') as fh:
-            inhalt = base64.b64encode(fh.read()).decode('ascii')
-        try:
-            self.aufruf('pdf', ordner_id=ordner_id, pfad=pfad, name=name, inhalt=inhalt)
-        except DriveFehler as e:
-            raise DriveFehler(BRUECKE_ALT) if 'Unbekannte Aktion' in str(e) else e
+        """HTML-Seite hier als PDF drucken und hochladen."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ziel = os.path.join(tmp, 'mail.pdf')
+            self._pdf_drucken(lokal_html, ziel)
+            self.hochladen(ort, name, ziel)
 
-    def loeschen(self, ort, name):
-        """Datei in den Papierkorb (dort 30 Tage wiederherstellbar)."""
-        ordner_id, pfad = teilen(ort)
-        try:
-            self.aufruf('loeschen', ordner_id=ordner_id, pfad=pfad, name=name)
-        except DriveFehler as e:
-            raise DriveFehler(BRUECKE_ALT) if 'Unbekannte Aktion' in str(e) else e
+    def wegraeumen(self, ort, name):
+        """Datei in den Sammelordner Papierkorb des Agentenkontos verschieben."""
+        self.verschieben(ort, ':' + PAPIERKORB, name)
 
     def verschieben(self, von, nach, name, leeren=False):
         von_id, von_pfad = teilen(von)
@@ -106,6 +104,23 @@ class Bruecke:
 def dateiname(meta, name):
     """Datum voran, damit gleichnamige Anhaenge verschiedener Mails nicht kollidieren."""
     return '%s %s' % (meta.get('erstellt'), os.path.basename(name))
+
+
+def html_als_pdf(html, pdf):
+    """HTML-Datei mit Chrome/Chromium als PDF drucken (auf GitHub-Runnern vorhanden)."""
+    programm = os.environ.get('CHROME') or next(
+        (p for p in ('google-chrome', 'chromium', 'chromium-browser') if shutil.which(p)), None)
+    if not programm:
+        raise DriveFehler('Kein Chrome/Chromium fuer das Mail-PDF gefunden')
+    try:
+        subprocess.run([programm, '--headless', '--no-sandbox', '--disable-gpu',
+                        '--no-pdf-header-footer', '--print-to-pdf=' + pdf,
+                        'file://' + os.path.abspath(html)],
+                       check=True, capture_output=True, timeout=120)
+    except (subprocess.SubprocessError, OSError) as e:
+        raise DriveFehler('Mail-PDF nicht erzeugt: %s' % e)
+    if not os.path.isfile(pdf):
+        raise DriveFehler('Mail-PDF nicht erzeugt')
 
 
 def mail_pdf_name(meta, titel):
@@ -158,13 +173,13 @@ def _anhaenge_abgleichen(n, soll, lokal, bruecke):
 
 def _mail_abgleichen(n, soll, lokal, bruecke):
     """Mail als PDF ablegen oder nachziehen, wenn mail_drive gesetzt ist;
-    in der Web-App abgewaehlt, kommt das PDF in den Papierkorb."""
+    in der Web-App abgewaehlt, kommt das PDF in den Ordner Papierkorb."""
     ist = n.meta.get('mail_pdf')
     name = mail_pdf_name(n.meta, n.titel)
     if not n.meta.get('mail_drive'):
         if ist is None:
             return None
-        bruecke.loeschen(ist, name)
+        bruecke.wegraeumen(ist, name)
         del n.meta['mail_pdf']
         return 'verschoben'
     if ist == soll:

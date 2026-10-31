@@ -708,7 +708,7 @@ function driveStand(meta) {
     else if (meta.drive === soll) zeilen.push([`${n} in Drive.`, 'gut']);
     else zeilen.push([`${n}: werden beim nächsten Abruf verschoben.`, 'warn']);
   }
-  if (!meta.mail_drive && meta.mail_pdf) zeilen.push(['Mail als PDF: kommt beim nächsten Abruf in den Drive-Papierkorb.', 'warn']);
+  if (!meta.mail_drive && meta.mail_pdf) zeilen.push(['Mail als PDF: kommt beim nächsten Abruf in den Ordner „Second Brain Papierkorb“.', 'warn']);
   if (meta.mail_drive) {
     if (!meta.mail_pdf) zeilen.push(['Mail als PDF: wird beim nächsten Abruf in Drive abgelegt.', 'warn']);
     else if (meta.mail_pdf === soll) zeilen.push(['Mail als PDF in Drive.', 'gut']);
@@ -785,7 +785,7 @@ function mailFormular(m, karte, knoepfe, fehler) {
   const felder = auswahlFelder(vorgabe);
   const liegt = !!(m.meta && m.meta.mail_pdf);
   const haken = pdfHaken(!!(m.meta && m.meta.mail_drive),
-    liegt ? 'Mail als PDF in Drive (Haken weg: PDF kommt in den Papierkorb)' : undefined);
+    liegt ? 'Mail als PDF in Drive (Haken weg: PDF kommt in den Ordner „Second Brain Papierkorb“)' : undefined);
   const hinweis = document.createElement('p');
   hinweis.className = 'hinweis';
   hinweis.textContent = z ? 'Der nächste Abruf holt die vollständige Mail mit Anhängen aus dem Postfach. Er wird gleich gestartet.'

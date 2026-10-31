@@ -57,20 +57,6 @@ const AKTIONEN = {
     const blob = Utilities.newBlob(Utilities.base64Decode(a.inhalt), a.typ || 'application/octet-stream', a.name);
     return { id: f.createFile(blob).getId() };
   },
-  // Mail als PDF: die HTML-Seite der Mail wird hier umgewandelt.
-  pdf(a) {
-    const f = ordner(a.ordner_id, a.pfad, true);
-    const alt = datei(f, a.name);
-    if (alt) return { id: alt.getId(), vorhanden: true };
-    const html = Utilities.newBlob(Utilities.base64Decode(a.inhalt), 'text/html', 'mail.html');
-    return { id: f.createFile(html.getAs('application/pdf').setName(a.name)).getId() };
-  },
-  // In der Web-App abgewaehlt: in den Papierkorb (30 Tage wiederherstellbar).
-  loeschen(a) {
-    const d = datei(ordner(a.ordner_id, a.pfad, false), a.name);
-    if (d) d.setTrashed(true);
-    return { geloescht: !!d };
-  },
   verschieben(a) {
     const von = ordner(a.von_id, a.von_pfad, false);
     const d = datei(von, a.name);

@@ -37,7 +37,7 @@ Verknüpft: [[IONOS]]
 | `absender` | nein | Mail-Adresse des Absenders; daraus lernt die Heuristik |
 | `umsaetze` | nein | Verweise auf verknüpfte Umsätze, `<konto>/<datum>/<nr>` |
 | `anhaenge`, `drive` | nein | Dateinamen der Anhänge und ihr Ort in Drive (`<ordner-id>:<pfad>`) |
-| `mail_drive`, `mail_pdf` | nein | Mail soll als PDF in den Drive-Ordner (Web-App, Regel, gelernt oder KI-Vorschlag); `mail_pdf` ist ihr Ort, sobald sie dort liegt; ohne `mail_drive` kommt ein vorhandenes PDF in den Papierkorb |
+| `mail_drive`, `mail_pdf` | nein | Mail soll als PDF in den Drive-Ordner (Web-App, Regel, gelernt oder KI-Vorschlag); `mail_pdf` ist ihr Ort, sobald sie dort liegt; ohne `mail_drive` kommt ein vorhandenes PDF in den Ordner „Second Brain Papierkorb“ des Agentenkontos. Das PDF druckt Chrome im Ablauf, die Drive-Brücke braucht dafür keine neue Version |
 | `ohne_anhang` | nein | Mail ohne Dokument, trotzdem abgelegt; daraus lernt das Einordnen, dass dieser Absender wichtig ist |
 | `nachholen` | nein | in der Web-App aus dem Index abgelegt; der nächste Abruf holt vollständigen Text und Anhänge (`second-brain nachholen`), sonst `nachholen_fehler` |
 

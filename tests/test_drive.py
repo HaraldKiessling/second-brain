@@ -30,7 +30,14 @@ class Fake:
 
     @property
     def bruecke(self):
-        return drive.Bruecke('https://script.example/exec', 'geheim', senden=self)
+        return drive.Bruecke('https://script.example/exec', 'geheim', senden=self,
+                             pdf_drucken=drucken)
+
+
+def drucken(html, pdf):
+    """Statt Chrome: PDF-Kopf plus HTML, damit Tests den Inhalt sehen."""
+    with open(html, 'rb') as rein, open(pdf, 'wb') as raus:
+        raus.write(b'%PDF ' + rein.read())
 
 
 @pytest.fixture
