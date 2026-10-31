@@ -67,8 +67,9 @@ def test_mail_als_pdf_in_den_themenordner_und_beim_korrigieren_mit(repo, tmp_pat
     assert drive.abgleichen(repo, f.bruecke, anh) == (1, 0)
     assert [(a['aktion'], a['ordner_id'], a['pfad'], a['name']) for a in f.aufrufe] == [
         ('hochladen', EDV, 'reisen', '2026-10-28 ticket.pdf'),
-        ('pdf', EDV, 'reisen', '2026-10-28 Mail Buchungsbestätigung.pdf')]
-    assert b'Buchung Nr. 4711' in f.aufrufe[1]['inhalt']
+        ('hochladen', EDV, 'reisen', '2026-10-28 Mail Buchungsbestätigung.pdf')]
+    assert f.aufrufe[1]['typ'] == 'application/pdf'
+    assert f.aufrufe[1]['inhalt'].startswith(b'%PDF') and b'Buchung Nr. 4711' in f.aufrufe[1]['inhalt']
     n = notiz(repo, 'notizen', '2026', 'edv', NID + '.md')
     assert n.meta['mail_pdf'] == n.meta['drive'] == EDV + ':reisen'
     assert daten.pruefen(repo) == []
@@ -100,15 +101,18 @@ def test_vorhandene_notiz_als_pdf_auch_wenn_mail_geloescht(repo, tmp_path):
     assert 'Betrag 12 Euro' in seite
     f = Fake()
     assert drive.abgleichen(repo, f.bruecke, anh) == (1, 0)
-    assert [a['aktion'] for a in f.aufrufe] == ['pdf']
+    assert [a['name'] for a in f.aufrufe] == ['2026-10-28 Mail Rechnung.pdf']
 
 
-def test_alte_bruecke_ohne_pdf_meldet_was_zu_tun_ist(repo, tmp_path):
+def test_ohne_chrome_klare_meldung_und_spaeter_erneut(repo, tmp_path, monkeypatch):
     anh = str(tmp_path / 'anh')
     wie_web_app(repo, BUCHUNG, mail_drive=True)
     mail.nachholen(repo, 'gmx', holen_aus(BUCHUNG), anh)
-    with pytest.raises(drive.DriveFehler, match='neue Version'):
-        drive.abgleichen(repo, Fake('Unbekannte Aktion: pdf').bruecke, anh)
+    monkeypatch.setenv('CHROME', str(tmp_path / 'fehlt'))
+    f = Fake()
+    b = drive.Bruecke('https://script.example/exec', 'geheim', senden=f)
+    with pytest.raises(drive.DriveFehler, match='Mail-PDF'):
+        drive.abgleichen(repo, b, anh)
     assert 'mail_pdf' not in notiz(repo, 'notizen', '2026', 'edv', NID + '.md').meta
 
 
@@ -137,6 +141,18 @@ def test_pdf_abgewaehlt_kommt_in_den_papierkorb(repo, tmp_path):
         fh.write(nz.schreiben(n))
     f.aufrufe.clear()
     assert drive.abgleichen(repo, f.bruecke) == (0, 1)
-    assert f.aufrufe == [{'aktion': 'loeschen', 'ordner_id': EDV, 'pfad': 'reisen',
-                          'name': '2026-10-28 Mail Buchungsbestätigung.pdf'}]
+    assert f.aufrufe == [{'aktion': 'verschieben', 'von_id': EDV, 'von_pfad': 'reisen',
+                          'ordner_id': '', 'pfad': 'Second Brain Papierkorb',
+                          'name': '2026-10-28 Mail Buchungsbestätigung.pdf', 'leeren': False}]
     assert 'mail_pdf' not in notiz(repo, 'notizen', '2026', 'edv', NID + '.md').meta
+
+
+@pytest.mark.skipif(not any(__import__('shutil').which(p) for p in
+                            ('google-chrome', 'chromium', 'chromium-browser')),
+                    reason='kein Chrome installiert')
+def test_chrome_druckt_die_mail_seite(tmp_path):
+    html = tmp_path / 'm.html'
+    html.write_text(mail.mail_seite('a@b.de', '2026-10-28', 'Flug', 'Flug LH 123 am 3. Dezember'),
+                    encoding='utf-8')
+    drive.html_als_pdf(str(html), str(tmp_path / 'm.pdf'))
+    assert (tmp_path / 'm.pdf').read_bytes().startswith(b'%PDF')
