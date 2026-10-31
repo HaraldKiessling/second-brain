@@ -32,6 +32,7 @@
     <nav id="reiter" hidden>
       <button data-reiter="uebersicht" class="aktiv">Übersicht</button>
       <button data-reiter="eingang">Eingang</button>
+      <button data-reiter="mails">Mails</button>
       <button data-reiter="zugang">Zugangsdaten</button>
       <button data-reiter="regeln">Regeln</button>
       <button data-reiter="dateien">Einstellungen</button>
@@ -57,6 +58,26 @@
       <table><thead><tr><th>Datum</th><th>Absender</th><th>Betreff</th><th>Grund</th></tr></thead><tbody id="verworfen-liste"></tbody></table>
     </section>
 
+    <section id="mails" class="reiter" hidden>
+      <h2>Mails</h2>
+      <p>Alle Mails eines Monats und wo sie im Second Brain liegen. Du kannst eine Mail anders ablegen, eine Mail aus dem Index zur Notiz machen und wichtige Mails (z. B. Buchungsbestätigungen) als PDF in den Drive-Ordner geben.</p>
+      <div class="reihe">
+        <label>Monat <select id="mails-monat"></select></label>
+        <label>Zeigen
+          <select id="mails-art">
+            <option value="">alle</option>
+            <option value="notiz">Notizen</option>
+            <option value="eingang">im Eingang</option>
+            <option value="index">nur im Index</option>
+            <option value="verworfen">verworfen</option>
+          </select>
+        </label>
+        <label>Suche <input id="mails-suche" type="search" placeholder="Absender oder Betreff"></label>
+      </div>
+      <p id="mails-zahl" class="hinweis"></p>
+      <div id="mails-liste"></div>
+    </section>
+
     <section id="zugang" class="reiter" hidden>
       <h2>Zugangsdaten</h2>
       <p>Werte werden verschlüsselt als GitHub-Secret gespeichert. Danach kann sie nur noch der Ablauf lesen, auch diese Seite nicht.</p>
@@ -74,6 +95,7 @@
             <button id="drive-testen">Testen und speichern</button></li>
         </ol>
         <div id="drive-ergebnis" class="hinweis"></div>
+        <p class="hinweis">Schon verbunden und das Skript wurde aktualisiert (z. B. für „Mail als PDF in Drive“)? Code oben neu kopieren und im Skript ersetzen, dann <b>Bereitstellen → Bereitstellungen verwalten → Bearbeiten (Stift) → Version: Neue Version → Bereitstellen</b>. Die URL bleibt gleich; danach hier noch einmal „Testen und speichern“.</p>
       </div>
       <details><summary>Weiteres Secret</summary>
         <label>Name <input id="secret-neu-name" placeholder="NAME_IN_GROSSBUCHSTABEN"></label>

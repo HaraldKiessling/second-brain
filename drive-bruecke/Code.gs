@@ -57,6 +57,14 @@ const AKTIONEN = {
     const blob = Utilities.newBlob(Utilities.base64Decode(a.inhalt), a.typ || 'application/octet-stream', a.name);
     return { id: f.createFile(blob).getId() };
   },
+  // Mail als PDF: die HTML-Seite der Mail wird hier umgewandelt.
+  pdf(a) {
+    const f = ordner(a.ordner_id, a.pfad, true);
+    const alt = datei(f, a.name);
+    if (alt) return { id: alt.getId(), vorhanden: true };
+    const html = Utilities.newBlob(Utilities.base64Decode(a.inhalt), 'text/html', 'mail.html');
+    return { id: f.createFile(html.getAs('application/pdf').setName(a.name)).getId() };
+  },
   verschieben(a) {
     const von = ordner(a.von_id, a.von_pfad, false);
     const d = datei(von, a.name);

@@ -90,6 +90,12 @@ th { color: var(--leise); font-weight: 500; }
 .karte details { margin-top: 8px; }
 .karte pre { white-space: pre-wrap; font-size: 13px; color: var(--leise); max-height: 12em; overflow: auto; }
 .konfidenz { font-weight: 600; }
+.ort { margin: 6px 0; padding: 6px 8px; background: var(--grund); border-radius: 6px; font-size: 14px; }
+.ort .art { font-weight: 600; margin-right: 6px; }
+.ort .hinweis { display: block; }
+.mail-form { margin-top: 8px; }
+.mail-form label.haken { display: flex; gap: 6px; color: var(--text); }
+.mail-form label.haken input { width: auto; display: inline; margin: 0; }
 .reihe { display: flex; flex-wrap: wrap; gap: 0 12px; }
 .reihe label { flex: 1 1 200px; }
 

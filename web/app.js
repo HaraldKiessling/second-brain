@@ -132,7 +132,7 @@ function zeigeReiter(name) {
   document.querySelectorAll('.reiter').forEach((s) => { s.hidden = s.id !== name; });
   document.querySelectorAll('#reiter button').forEach((b) => b.classList.toggle('aktiv', b.dataset.reiter === name));
   merke('sb-reiter', name);
-  return ({ uebersicht: zeigeUebersicht, eingang: zeigeEingang, zugang: () => { driveCodeZeigen(); return zeigeSecrets(); }, regeln: zeigeRegeln, dateien: zeigeDatei, ablaeufe: zeigeLaeufe })[name]();
+  return ({ uebersicht: zeigeUebersicht, eingang: zeigeEingang, mails: zeigeMails, zugang: () => { driveCodeZeigen(); return zeigeSecrets(); }, regeln: zeigeRegeln, dateien: zeigeDatei, ablaeufe: zeigeLaeufe })[name]();
 }
 
 function zelle(zeile, text, klasse) {
@@ -464,7 +464,8 @@ function auswahlPruefen(w) {
 }
 
 // Eingang -> Notiz unter notizen/<jahr>/<thema>/, mit Protokollzeile, ein Commit.
-async function eingangAblegen(e, w, durch, wie = 'aus Eingang abgelegt') {
+// weitere: zusaetzliche Aenderungen fuer denselben Commit (z. B. Indexzeile entfernen).
+async function eingangAblegen(e, w, durch, wie = 'aus Eingang abgelegt', weitere = async () => []) {
   const meta = { ...e.meta };
   const datum = String(meta.erstellt);
   delete meta.offen_grund;
@@ -475,15 +476,18 @@ async function eingangAblegen(e, w, durch, wie = 'aus Eingang abgelegt') {
   meta.personen = w.personen;
   meta.ablage = [jahrOrdner(datum), thema.ablage, unterordnerEinsetzen(w.unterordner, datum)].filter(Boolean).join('/');
   meta.eingeordnet_durch = durch;
+  if (w.mail_drive) meta.mail_drive = true;
+  else if ('mail_drive' in w && !meta.mail_pdf) delete meta.mail_drive;
   if (!meta.absender && absenderAdresse(e)) meta.absender = absenderAdresse(e);
   const ziel = `notizen/${datum.slice(0, 4)}/${w.thema}/${meta.id}.md`;
   const heute = new Date().toISOString().slice(0, 10);
   const protokoll = `protokoll/${heute.slice(0, 7)}.md`;
   await commitMehrere(async () => [
     { pfad: ziel, text: notizSchreiben(meta, e.text) },
-    ...(ziel !== e.pfad ? [{ pfad: e.pfad, loeschen: true }] : []),
+    ...(e.pfad && ziel !== e.pfad ? [{ pfad: e.pfad, loeschen: true }] : []),
     { pfad: protokoll, text: protokollZeile(await dateiOderLeer(protokoll), heute, durch, `Notiz \`${meta.id}\` ${wie}`) },
-  ], `${e.pfad.startsWith('eingang/') ? 'eingang' : 'korrektur'}: ${meta.id} -> ${w.thema} (Web)`);
+    ...await weitere(),
+  ], `${!e.pfad ? 'index' : e.pfad.startsWith('eingang/') ? 'eingang' : 'korrektur'}: ${meta.id} -> ${w.thema} (Web)`);
   melde(`Abgelegt unter ${meta.ablage}.`, 'gut');
   return ziel;
 }
@@ -576,6 +580,243 @@ function autoKarte(a) {
     }, ''), fehler);
   }, 'klein leise'), fehler);
   return karte;
+}
+
+// Mails: alle Mails eines Monats mit Ablageort; Ablage aendern, Indexmail zur
+// Notiz machen, Mail als PDF nach Drive. Was dafuer das Postfach braucht
+// (voller Text, Anhaenge, PDF), erledigt der naechste Abruf (second-brain nachholen).
+
+const SAMMELORDNER = 'Second Brain Eingang';
+
+function slug(text, laenge) {
+  const s = text.toLowerCase().normalize('NFKD').replace(/ß/g, 'ss').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return s.slice(0, laenge).replace(/-+$/, '') || 'ohne-titel';
+}
+
+// Wie _absender_kurz in mail.py, damit die ID dem Abruf gleicht.
+function absenderKurz(absender) {
+  const m = /^\s*"?([^"<]*?)"?\s*<([^>]+)>/.exec(absender);
+  const name = m ? m[1].trim() : '';
+  const adresse = m ? m[2] : absender.trim();
+  if (name && !name.toLowerCase().replace(/-/g, '').includes('noreply')) return name;
+  const domain = adresse.split('@').pop();
+  return domain.includes('.') ? domain.split('.').slice(-2, -1)[0] : (adresse || 'unbekannt');
+}
+
+const adresseVon = (absender) => ((/<([^>]+)>/.exec(absender) || [, absender])[1] || '').trim().toLowerCase();
+
+// Soll-Ort in Drive wie drive.ziel(): "<ordner-id>:<pfad>".
+function driveZiel(meta) {
+  const t = zustand.themen[(meta.themen || [])[0]] || {};
+  const teile = String(meta.ablage || '').split('/');
+  const id = (t.drive || {})[teile[0]];
+  if (teile.length >= 2 && teile[1] === t.ablage && id) return `${id}:${teile.slice(2).join('/')}`;
+  return `:${SAMMELORDNER}/${meta.id}`;
+}
+
+async function baumLaden() {
+  const d = await gh(`/repos/${zustand.repo}/git/trees/main?recursive=1`);
+  return d.tree.filter((t) => t.type === 'blob').map((t) => t.path);
+}
+
+function monateAus(pfade) {
+  const monate = new Set([new Date().toISOString().slice(0, 7)]);
+  for (const p of pfade) {
+    const m = /^(?:notizen\/\d{4}\/[^/]+|eingang)\/(\d{4}-\d{2})-[^/]*\.md$/.exec(p) || /^index\/mail\/(\d{4}-\d{2})\.jsonl$/.exec(p);
+    if (m) monate.add(m[1]);
+  }
+  return [...monate].sort().reverse();
+}
+
+async function mailsLaden(monat, pfade) {
+  const md = pfade.filter((p) => new RegExp(`^(notizen/\\d{4}/[^/]+|eingang)/${monat}-[^/]*\\.md$`).test(p));
+  const notizen = await Promise.all(md.map(async (p) => {
+    try { return { art: p.startsWith('eingang/') ? 'eingang' : 'notiz', pfad: p, ...notizLesen((await dateiLesen(p)).text) }; } catch { return null; }
+  }));
+  const text = await dateiOderLeer(`index/mail/${monat}.jsonl`);
+  const index = text.split('\n').filter(Boolean).map((z) => { try { return JSON.parse(z); } catch { return null; } })
+    .filter(Boolean).map((z) => ({ art: z.verworfen ? 'verworfen' : 'index', zeile: z }));
+  const alle = [...notizen.filter(Boolean), ...index];
+  const datum = (m) => String(m.zeile ? m.zeile.datum : m.meta.erstellt);
+  return alle.sort((a, b) => datum(b).localeCompare(datum(a)));
+}
+
+async function zeigeMails(neu = true) {
+  const liste = $('#mails-liste');
+  const wahl = $('#mails-monat');
+  if (neu) {
+    liste.textContent = 'Lade …';
+    try {
+      await stammdatenLaden();
+      if (!zustand.regeln) zustand.regeln = JSON.parse((await dateiLesen(REGEL_DATEI)).text);
+      zustand.pfade = await baumLaden();
+      const monate = monateAus(zustand.pfade);
+      const vorher = wahl.value || lade('sb-mails-monat');
+      wahl.textContent = '';
+      for (const m of monate) wahl.add(new Option(new Date(m + '-15').toLocaleDateString('de-DE', { month: 'long', year: 'numeric' }), m));
+      wahl.value = monate.includes(vorher) ? vorher : monate[0];
+      zustand.mails = await mailsLaden(wahl.value, zustand.pfade);
+    } catch (e) { liste.textContent = ''; melde(e.message, 'fehler'); return; }
+  }
+  const art = $('#mails-art').value;
+  const suche = $('#mails-suche').value.trim().toLowerCase();
+  const passt = (m) => (!art || m.art === art) && (!suche || mailText(m).toLowerCase().includes(suche));
+  const gezeigt = zustand.mails.filter(passt);
+  const zahl = (a) => zustand.mails.filter((m) => m.art === a).length;
+  $('#mails-zahl').textContent = `${zustand.mails.length} Mails: ${zahl('notiz')} Notizen, ${zahl('eingang')} im Eingang, ${zahl('index')} nur im Index, ${zahl('verworfen')} verworfen.`;
+  liste.textContent = '';
+  for (const m of gezeigt.slice(0, 200)) liste.append(mailKarte(m));
+  if (!gezeigt.length) { const p = document.createElement('p'); p.className = 'hinweis'; p.textContent = 'Keine passenden Mails.'; liste.append(p); }
+}
+
+function mailText(m) {
+  return m.zeile ? `${m.zeile.absender} ${m.zeile.betreff}` : `${m.meta.absender || ''} ${titelVon(m.text)}`;
+}
+
+function ortText(meta) {
+  const thema = (meta.themen || [])[0];
+  const t = zustand.themen[thema] || {};
+  return [t.name || thema, unterordnerAusAblage(meta.ablage, thema)].filter(Boolean).join(' / ');
+}
+
+// Zeilen zum Drive-Stand einer Notiz: [text, klasse]
+function driveStand(meta) {
+  const soll = driveZiel(meta);
+  const zeilen = [];
+  if (meta.nachholen) zeilen.push(['Vollständige Mail und Anhänge werden beim nächsten Abruf aus dem Postfach geholt.', 'warn']);
+  if (meta.nachholen_fehler) zeilen.push([meta.nachholen_fehler, 'warn']);
+  if ((meta.anhaenge || []).length) {
+    const n = meta.anhaenge.length === 1 ? 'Anhang' : `${meta.anhaenge.length} Anhänge`;
+    if (!meta.drive) zeilen.push([`${n}: noch nicht in Drive.`, 'warn']);
+    else if (meta.drive === soll) zeilen.push([`${n} in Drive.`, 'gut']);
+    else zeilen.push([`${n}: werden beim nächsten Abruf verschoben.`, 'warn']);
+  }
+  if (meta.mail_drive) {
+    if (!meta.mail_pdf) zeilen.push(['Mail als PDF: wird beim nächsten Abruf in Drive abgelegt.', 'warn']);
+    else if (meta.mail_pdf === soll) zeilen.push(['Mail als PDF in Drive.', 'gut']);
+    else zeilen.push(['Mail als PDF: wird beim nächsten Abruf verschoben.', 'warn']);
+  }
+  return zeilen;
+}
+
+function mailKarte(m) {
+  const karte = document.createElement('div');
+  karte.className = 'karte';
+  const z = m.zeile;
+  const h = document.createElement('h3');
+  h.textContent = z ? (z.betreff || '(ohne Betreff)') : titelVon(m.text);
+  const info = document.createElement('div');
+  info.className = 'hinweis';
+  info.textContent = z ? `${z.datum} · ${z.absender} · ${z.konto}`
+    : `${m.meta.erstellt} · ${absenderAdresse(m) || 'unbekannt'} · ${m.meta.quelle}`;
+  const ort = document.createElement('div');
+  ort.className = 'ort';
+  const art = document.createElement('span');
+  art.className = 'art';
+  const was = document.createElement('span');
+  ort.append(art, was);
+  const zusatz = (text, klasse = 'hinweis') => { const d = document.createElement('span'); d.className = 'hinweis ' + klasse; d.textContent = text; ort.append(d); return d; };
+  if (m.art === 'notiz') {
+    art.textContent = 'Notiz:';
+    was.textContent = ortText(m.meta);
+    zusatz(`Drive-Pfad: ${m.meta.ablage || '–'} · eingeordnet: ${m.meta.eingeordnet_durch || '–'}`);
+    for (const [text, klasse] of driveStand(m.meta)) zusatz(text, klasse);
+    const id = driveZiel(m.meta).split(':')[0];
+    if (id) {
+      const a = document.createElement('a');
+      a.href = `https://drive.google.com/drive/folders/${id}`;
+      a.target = '_blank'; a.rel = 'noopener';
+      a.textContent = 'Themenordner in Drive öffnen';
+      zusatz('').append(a);
+    }
+  } else if (m.art === 'eingang') {
+    art.textContent = 'Im Eingang:';
+    was.textContent = 'wartet auf deine Entscheidung';
+  } else if (m.art === 'verworfen') {
+    art.textContent = 'Verworfen:';
+    was.textContent = z.verworfen;
+  } else {
+    art.textContent = 'Nur im Index:';
+    was.textContent = 'auffindbar, aber keine Notiz' + (z.spam ? ` (Spam-Wert ${Math.round(z.spam * 100)} %)` : '');
+  }
+  karte.append(h, info, ort);
+
+  const fehler = document.createElement('p');
+  fehler.className = 'fehler';
+  const knoepfe = document.createElement('div');
+  if (m.art === 'eingang') knoepfe.append(knopf('Im Eingang ansehen', () => zeigeReiter('eingang'), 'klein leise'));
+  else if (m.art === 'notiz') knoepfe.append(knopf('Ablage ändern', () => mailFormular(m, karte, knoepfe, fehler), 'klein'));
+  else if (z.message_id) knoepfe.append(knopf('Als Notiz ablegen', () => mailFormular(m, karte, knoepfe, fehler), 'klein'));
+  else zusatz('Ohne Message-ID, kann nicht aus dem Postfach geholt werden.');
+  const details = document.createElement('details');
+  const summary = document.createElement('summary');
+  summary.textContent = 'Mail anzeigen';
+  const pre = document.createElement('pre');
+  pre.textContent = z ? z.kurz : m.text.replace(/^# .*\n+/, '');
+  details.append(summary, pre);
+  karte.append(knoepfe, fehler, details);
+  return karte;
+}
+
+function mailFormular(m, karte, knoepfe, fehler) {
+  knoepfe.hidden = true;
+  const form = document.createElement('div');
+  form.className = 'mail-form';
+  const z = m.zeile;
+  const vorgabe = z ? {} : { thema: (m.meta.themen || [])[0], unterordner: unterordnerAusAblage(m.meta.ablage, (m.meta.themen || [])[0]), personen: m.meta.personen };
+  const felder = auswahlFelder(vorgabe);
+  const haken = document.createElement('label');
+  haken.className = 'haken';
+  const pdf = document.createElement('input');
+  pdf.type = 'checkbox';
+  pdf.checked = !!(m.meta && m.meta.mail_drive);
+  pdf.disabled = !!(m.meta && m.meta.mail_pdf);
+  haken.append(pdf, pdf.disabled ? 'Mail liegt als PDF in Drive (zieht beim Umhängen mit)' : 'Mail zusätzlich als PDF in den Drive-Ordner legen (z. B. Buchungsbestätigung)');
+  const hinweis = document.createElement('p');
+  hinweis.className = 'hinweis';
+  hinweis.textContent = z ? 'Der nächste Abruf holt die vollständige Mail mit Anhängen aus dem Postfach. Er wird gleich gestartet.'
+    : 'Liegen Anhänge oder das Mail-PDF schon in Drive, verschiebt der nächste Abruf sie in den neuen Ordner.';
+  const speichern = knopf('Speichern', async () => {
+    fehler.textContent = '';
+    const w = { ...felder.wert(), mail_drive: pdf.checked };
+    const f = auswahlPruefen(w);
+    if (f) { fehler.textContent = f; return; }
+    speichern.disabled = true;
+    try {
+      const nachAbruf = z ? true : (w.mail_drive && !m.meta.mail_drive) || (m.meta.drive || m.meta.mail_pdf);
+      if (z) await indexAblegen(m, w);
+      else await eingangAblegen(m, w, 'manuell', w.mail_drive && !m.meta.mail_drive ? 'korrigiert, Mail als PDF für Drive vorgemerkt' : 'korrigiert');
+      if (nachAbruf) await abrufStarten();
+      await zeigeMails();
+    } catch (err) { fehler.textContent = err.message; speichern.disabled = false; }
+  }, '');
+  const abbrechen = knopf('Abbrechen', () => { form.remove(); knoepfe.hidden = false; }, 'leise');
+  form.append(felder, haken, hinweis, speichern, abbrechen);
+  karte.insertBefore(form, fehler);
+}
+
+// Indexmail -> Notiz mit Kurzinhalt und nachholen: true; Indexzeile entfaellt.
+async function indexAblegen(m, w) {
+  const z = m.zeile;
+  const basis = `${z.datum}-${slug(absenderKurz(z.absender), 20)}-${slug(z.betreff || '', 40)}`;
+  let id = basis;
+  for (let n = 2; zustand.pfade.some((p) => p.endsWith(`/${id}.md`)); n++) id = `${basis}-${n}`;
+  const meta = { id, erstellt: z.datum, quelle: z.konto, personen: [], themen: [], message_id: z.message_id, absender: adresseVon(z.absender), nachholen: true };
+  const text = `# ${(z.betreff || '').trim() || '(ohne Betreff)'}\n\nVon: ${z.absender}  \nDatum: ${z.datum}\n\n${z.kurz || ''}\n`;
+  const index = `index/mail/${z.datum.slice(0, 7)}.jsonl`;
+  await eingangAblegen({ pfad: '', meta, text }, w, 'manuell', 'aus dem Index abgelegt', async () => {
+    const zeilen = (await dateiOderLeer(index)).split('\n').filter(Boolean)
+      .filter((l) => { try { return JSON.parse(l).message_id !== z.message_id; } catch { return true; } });
+    return [{ pfad: index, text: zeilen.map((l) => l + '\n').join('') }];
+  });
+}
+
+async function abrufStarten() {
+  await gh(`/repos/${zustand.repo}/actions/workflows/${MAIL_WORKFLOW}/dispatches`, {
+    method: 'POST', body: JSON.stringify({ ref: 'main' }),
+  });
+  melde($('#meldung').textContent + ' Der Abruf ist gestartet und erledigt den Rest in ein paar Minuten.', 'gut');
 }
 
 // Eingang -> Indexeintrag; bei Spam zusaetzlich Absender in die Verwerfen-Liste.
@@ -904,6 +1145,14 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#datei-wahl').addEventListener('change', zeigeDatei);
   $('#datei-speichern').addEventListener('click', dateiSpeichern);
   $('#mail-starten').addEventListener('click', mailStarten);
+  $('#mails-monat').addEventListener('change', async () => {
+    merke('sb-mails-monat', $('#mails-monat').value);
+    $('#mails-liste').textContent = 'Lade …';
+    try { zustand.mails = await mailsLaden($('#mails-monat').value, zustand.pfade); } catch (e) { melde(e.message, 'fehler'); }
+    zeigeMails(false);
+  });
+  $('#mails-art').addEventListener('change', () => zeigeMails(false));
+  $('#mails-suche').addEventListener('input', () => zeigeMails(false));
 
   zustand.repo = lade('sb-repo') || $('#repo').value;
   zustand.token = lade('sb-token');

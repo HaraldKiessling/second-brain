@@ -76,6 +76,31 @@ def _mail_abruf(args):
     return 0
 
 
+def _nachholen(args):
+    from . import mail
+    benutzer, passwort = os.environ.get('MAIL_USER'), os.environ.get('MAIL_PASSWORD')
+    if args.eml:
+        def holen(ids):
+            gefunden = {}
+            for d in sorted(os.listdir(args.eml)):
+                if d.endswith('.eml'):
+                    with open(os.path.join(args.eml, d), 'rb') as fh:
+                        roh = fh.read()
+                    mid = mail.mail_aus_bytes(roh).message_id
+                    if mid in ids:
+                        gefunden[mid] = roh
+            return gefunden
+    elif benutzer and passwort and args.host:
+        def holen(ids):
+            return mail.imap_holen(args.host, benutzer, passwort, ids, postfach=args.postfach)
+    else:
+        print('MAIL_USER, MAIL_PASSWORD und --host werden benoetigt (oder --eml)')
+        return 2
+    fertig, fehlt = mail.nachholen(args.daten, args.konto, holen, args.anhaenge)
+    print('%s: %d Mails nachgeholt, %d nicht mehr im Postfach' % (args.konto, fertig, fehlt))
+    return 0
+
+
 def _drive(args):
     from . import drive
     url, schluessel = os.environ.get('DRIVE_SKRIPT_URL'), os.environ.get('DRIVE_SCHLUESSEL')
@@ -131,6 +156,16 @@ def main(argv=None):
     ma.add_argument('--eml', help='statt IMAP: Ordner mit .eml-Dateien')
     ma.add_argument('--anhaenge', help='Verzeichnis fuer Anhaenge (nicht im Daten-Repo)')
     ma.set_defaults(fn=_mail_abruf)
+
+    nh = sub.add_parser('nachholen',
+                        help='in der Web-App angeforderte Mails noch einmal aus dem Postfach holen')
+    nh.add_argument('daten', help='Pfad zum Daten-Repo')
+    nh.add_argument('--konto', required=True)
+    nh.add_argument('--host', help='IMAP-Server')
+    nh.add_argument('--postfach', default='INBOX')
+    nh.add_argument('--eml', help='statt IMAP: Ordner mit .eml-Dateien')
+    nh.add_argument('--anhaenge', help='Verzeichnis fuer Anhaenge und Mail-Seiten')
+    nh.set_defaults(fn=_nachholen)
 
     dr = sub.add_parser('drive', help='Anhaenge in die Drive-Ordner hochladen und nachziehen')
     dr.add_argument('daten', help='Pfad zum Daten-Repo')
