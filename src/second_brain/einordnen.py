@@ -14,9 +14,15 @@ Stufen (die erste, die sicher genug ist, gewinnt):
 
 Notiz oder Eingang wird nur eine Mail mit Dokument-Anhang (wie in der
 bisherigen Ablage); ohne Dokument bleibt es beim Indexeintrag, es sei denn,
-eine Regel erlaubt es ausdruecklich (ohne_anhang: true) oder die Mail kommt
+eine Regel erlaubt es ausdruecklich (ohne_anhang: true), die Mail kommt
 von einer eigenen Adresse (eigene_adressen): was Harald sich selbst schickt,
-will er erfasst haben.
+will er erfasst haben, oder Harald hat schon eine Mail dieses Absenders ohne
+Anhang abgelegt (gelernt). Sonst fragt die KI, ob die Mail wichtig ist
+(Buchung, Vertrag, Termin ...); dann kommt sie mit Vorschlag in den Eingang.
+
+Ob die Mail selbst als PDF nach Drive soll (mail_drive), lernt die Heuristik
+aus den bisherigen Notizen desselben Absenders; Regeln und KI koennen es
+ebenfalls vorschlagen.
 
 Die Einstellungen stehen in config/einordnen.yaml (siehe STANDARD).
 """
@@ -71,11 +77,14 @@ class Vorschlag:
     unterordner: str = ''
     personen: list = field(default_factory=list)
     alternativen: list = field(default_factory=list)  # weitere Vorschlaege (KI)
+    mail_drive: bool = False
 
     def als_dict(self):
         d = {'thema': self.thema, 'unterordner': self.unterordner,
              'personen': list(self.personen), 'konfidenz': round(self.konfidenz, 2),
              'durch': self.durch, 'grund': self.grund}
+        if self.mail_drive:
+            d['mail_drive'] = True
         if self.alternativen:
             d['alternativen'] = [a.als_dict() for a in self.alternativen]
         return d
@@ -152,6 +161,8 @@ class Beispiel:
     unterordner: str
     personen: tuple
     durch: str = ''  # eingeordnet_durch der Notiz
+    ohne_anhang: bool = False  # Mail ohne Dokument, trotzdem abgelegt
+    mail_drive: bool = False   # Mail selbst als PDF in Drive
 
 
 def _absender_aus_text(text):
@@ -187,8 +198,10 @@ def beispiele_aus_notizen(pfade, themen):
         jahr = getattr(m.get('erstellt'), 'year', None)
         uo = unterordner_aus_ablage(m.get('ablage'),
                                     themen.get(thema, {}).get('ablage', ''), jahr)
+        ohne = bool(m.get('ohne_anhang'))
         beispiele.append(Beispiel(a, n.titel, thema, uo, tuple(m.get('personen') or ()),
-                                  str(m.get('eingeordnet_durch') or '')))
+                                  str(m.get('eingeordnet_durch') or ''), ohne,
+                                  bool(m.get('mail_drive'))))
     return beispiele
 
 
@@ -217,6 +230,10 @@ def regelvorschlaege(beispiele, regelwerk, eigene=(), abgelehnt=(), mindestens=2
                      'grund': '%d Notizen von %s, alle gleich eingeordnet' % (len(gruppe), d)}
         if uo:
             vorschlag['unterordner'] = uo
+        if all(b.ohne_anhang for b in gruppe):
+            vorschlag['ohne_anhang'] = True
+        if all(b.mail_drive for b in gruppe):
+            vorschlag['mail_drive'] = True
         vorschlaege.append(vorschlag)
     return vorschlaege
 
@@ -251,13 +268,24 @@ class Lerner:
     def kennt(self, absender):
         return adresse(absender) in self.nach_adresse or domain(absender) in self.nach_domain
 
+    def _gruppe(self, absender):
+        return (self.nach_adresse.get(adresse(absender))
+                or self.nach_domain.get(domain(absender)) or [])
+
+    def wichtig_ohne_anhang(self, absender):
+        """Hat Harald schon eine Mail dieses Absenders (sonst der Domain) ohne
+        Anhang abgelegt? Dann ist auch die naechste wichtig."""
+        return any(b.ohne_anhang for b in self._gruppe(absender))
+
     @staticmethod
     def _mehrheit(gruppe, faktor, durch, wer):
         zaehler = Counter((b.thema, b.unterordner, b.personen) for b in gruppe)
         (thema, uo, personen), k = zaehler.most_common(1)[0]
+        gleich = [b for b in gruppe if (b.thema, b.unterordner, b.personen) == (thema, uo, personen)]
         return Vorschlag(thema=thema, unterordner=uo, personen=list(personen),
                          konfidenz=faktor * k / (len(gruppe) + 0.5), durch=durch,
-                         grund='%d von %d Notizen von %s' % (k, len(gruppe), wer))
+                         grund='%d von %d Notizen von %s' % (k, len(gruppe), wer),
+                         mail_drive=2 * sum(b.mail_drive for b in gleich) > len(gleich))
 
     def vorschlag(self, absender, betreff, anhaenge=()):
         a, d = adresse(absender), domain(absender)
@@ -328,15 +356,19 @@ class KI:
     URL = 'https://openrouter.ai/api/v1/chat/completions'
     MEHRDEUTIG = 0.2
 
+    BEISPIELE = 30  # so viele bisherige Ablagen gehen als Muster in die Anfrage
+
     def __init__(self, schluessel, modell, themen, personen, max_anfragen=20,
-                 senden=None, hinweise='', unterordner=None):
+                 senden=None, hinweise='', unterordner=None, beispiele=()):
         self.schluessel = schluessel
         self.modell = modell
         self.themen = themen
         self.personen = personen
         self.rest = max_anfragen
+        self.rest_wichtig = max_anfragen  # eigenes Budget fuer Mails ohne Dokument
         self.hinweise = hinweise or ''
         self.unterordner = unterordner or {}  # thema -> bekannte Unterordner
+        self.beispiele = self._auswahl(beispiele)
         self._senden = senden or self._http
 
     def _http(self, nutzlast):
@@ -348,7 +380,18 @@ class KI:
         with urllib.request.urlopen(req, timeout=60) as antwort:
             return json.load(antwort)
 
-    def _prompt(self, absender, betreff, text, anhaenge, empfaenger=''):
+    @classmethod
+    def _auswahl(cls, beispiele):
+        """Je Domain und Ablage ein Beispiel, Haralds eigene Entscheidungen zuerst."""
+        gesehen, auswahl = set(), []
+        for b in sorted(beispiele, key=lambda b: b.durch != 'manuell'):
+            k = (b.adresse.split('@')[-1], b.thema, b.unterordner)
+            if k not in gesehen:
+                gesehen.add(k)
+                auswahl.append(b)
+        return auswahl[:cls.BEISPIELE]
+
+    def _prompt(self, absender, betreff, text, anhaenge, empfaenger='', ohne_dokument=False):
         zeilen = []
         for s, t in self.themen.items():
             z = '- %s (Ordner %s): %s' % (s, t.get('ablage', ''), t.get('zweck') or t.get('name', s))
@@ -357,6 +400,24 @@ class KI:
             zeilen.append(z)
         hinweise = ('Ablageregeln des Haushalts:\n%s\n\n' % self.hinweise.strip()
                     if self.hinweise.strip() else '')
+        if self.beispiele:
+            hinweise += 'So wurde bisher abgelegt (Absender | Betreff -> Thema/Unterordner):\n%s\n\n' % (
+                '\n'.join('- %s | %s -> %s%s%s%s' % (
+                    b.adresse.split('@')[-1], b.betreff[:60], b.thema,
+                    '/' + b.unterordner if b.unterordner else '',
+                    ' (ohne Anhang)' if b.ohne_anhang else '',
+                    ' (Mail als PDF)' if b.mail_drive else '') for b in self.beispiele))
+        if ohne_dokument:
+            hinweise += (
+                'Diese Mail hat kein Dokument und landet sonst nur im Suchindex. Setze '
+                '"wichtig": true nur, wenn sie aufbewahrt werden sollte, z. B. Buchungs-, '
+                'Reservierungs- oder Auftragsbestaetigung, Vertrag, Kuendigung, Termin, '
+                'Rechnung oder Beleg im Mailtext, Post von Behoerden, Bank oder Versicherung. '
+                'Werbung, Newsletter, Versand- und Zustellmeldungen, Login-Codes und '
+                'Bewertungsbitten sind nicht wichtig. Antworte zusaetzlich mit "wichtig": '
+                'true/false.\n')
+        hinweise += ('Setze "pdf": true, wenn die Mail selbst als Beleg in die Ablage '
+                     'gehoert (z. B. Buchungsbestaetigung ohne Anhang), sonst false.\n\n')
         return (
             'Ordne diese Mail in ein persoenliches Archiv ein. Das Thema ist der '
             'Ordner der Ablage; ein Unterordner ist optional, bevorzugt einer der '
@@ -364,7 +425,8 @@ class KI:
             'Themen:\n%s\nPersonen: %s\n\n%s'
             'Wenn mehrere Ordner in Frage kommen, nenne bis zu drei, den besten zuerst, '
             'jeweils mit eigener Konfidenz.\n'
-            'Antworte nur mit JSON: {"spam": true/false, "vorschlaege": [{"thema": "<slug>", '
+            'Antworte nur mit JSON: {"spam": true/false, "wichtig": true/false, '
+            '"pdf": true/false, "vorschlaege": [{"thema": "<slug>", '
             '"unterordner": "<Pfad oder leer>", "personen": ["<slug>"], '
             '"konfidenz": <0 bis 1>, "grund": "<ein Satz>"}]}\n\n'
             'Absender: %s\nEmpfaenger: %s\nBetreff: %s\nAnhaenge: %s\n\n%s'
@@ -387,17 +449,19 @@ class KI:
                          konfidenz=konf if personen else min(konf, 0.5),
                          durch=durch, grund=str(d.get('grund', '')))
 
-    def frage(self, absender, betreff, text, anhaenge=(), empfaenger=''):
-        """Vorschlag oder None (Budget aufgebraucht, Fehler, unbrauchbare Antwort)."""
-        if self.rest <= 0:
+    def frage(self, absender, betreff, text, anhaenge=(), empfaenger='', ohne_dokument=False):
+        """Vorschlag oder None (Budget aufgebraucht, Fehler, unbrauchbare Antwort;
+        ohne_dokument: auch wenn die KI die Mail nicht fuer wichtig haelt)."""
+        rest = 'rest_wichtig' if ohne_dokument else 'rest'
+        if getattr(self, rest) <= 0:
             return None
-        self.rest -= 1
+        setattr(self, rest, getattr(self, rest) - 1)
         try:
             antwort = self._senden({
                 'model': self.modell,
                 'messages': [{'role': 'user',
                               'content': self._prompt(absender, betreff, text, anhaenge,
-                                                      empfaenger)}],
+                                                      empfaenger, ohne_dokument)}],
                 'response_format': {'type': 'json_object'},
                 'temperature': 0,
             })
@@ -410,6 +474,8 @@ class KI:
         roh = daten.get('vorschlaege')
         if not isinstance(roh, list):  # aeltere Antwortform mit einem Vorschlag
             roh = [daten]
+        if ohne_dokument and (daten.get('spam') or daten.get('wichtig') is not True):
+            return None
         if daten.get('spam'):
             konf = max([float(d.get('konfidenz') or 0) for d in roh if isinstance(d, dict)] or [0])
             return Vorschlag(thema='', konfidenz=min(1.0, konf), durch=durch,
@@ -419,6 +485,8 @@ class KI:
         if not liste:
             return None
         liste.sort(key=lambda v: -v.konfidenz)
+        for v in liste:
+            v.mail_drive = daten.get('pdf') is True
         bester, rest = liste[0], liste[1:]
         bester.alternativen = rest
         if rest and bester.konfidenz - rest[0].konfidenz < self.MEHRDEUTIG:
@@ -437,10 +505,14 @@ def unterordner_gueltig(uo):
     return all(t.strip() and t not in ('.', '..') and '\\' not in t for t in teile)
 
 
+KI_WICHTIG_SPAM = 0.3  # Mails ohne Dokument ab diesem Spam-Wert gar nicht erst der KI zeigen
+
+
 def einordnen(mail, regelwerk, lerner, einst, ki=None):
     """Ergebnis fuer eine Mail (mail.Mail) nach allen Stufen."""
     eigen = adresse(mail.absender) in {e.lower() for e in einst['eigene_adressen']}
-    wichtig = mail.hat_dokument or eigen
+    gelernt = not (mail.hat_dokument or eigen) and lerner.wichtig_ohne_anhang(mail.absender)
+    wichtig = mail.hat_dokument or eigen or gelernt
     regel = regeln.einordnen(mail.absender, mail.betreff, wichtig, regelwerk,
                              mail.empfaenger)
     if regel.aktion in (regeln.VERWERFEN, regeln.NOTIZ):
@@ -458,6 +530,13 @@ def einordnen(mail, regelwerk, lerner, einst, ki=None):
         grund = regel.grund
         if regel.regel:
             grund = 'Regel %s, aber kein Dokument' % regel.regel
+        if ki is not None and spam < KI_WICHTIG_SPAM:
+            kv = ki.frage(mail.absender, mail.betreff, mail.text, [], mail.empfaenger,
+                          ohne_dokument=True)
+            if kv is not None and kv.thema:
+                # Nie ohne Rueckfrage: wichtig ist eine Vermutung der KI
+                return regeln.Ergebnis(regeln.OFFEN, 'KI hält die Mail für wichtig: ' + kv.grund,
+                                       vorschlag=kv, konfidenz=kv.konfidenz, spam=spam)
         return regeln.Ergebnis(regeln.INDEX, grund, spam=spam)
 
     vorschlag = lerner.vorschlag(mail.absender, mail.betreff,
@@ -482,6 +561,8 @@ def einordnen(mail, regelwerk, lerner, einst, ki=None):
 
     if eigen and vorschlag is None:
         grund = 'an dich selbst gesendet'
+    elif gelernt and vorschlag is not None and vorschlag.konfidenz < einst['schwelle']:
+        grund = 'ohne Anhang, aber von dir schon abgelegt; Konfidenz %.2f' % vorschlag.konfidenz
     elif versicherung or vorschlag is None:
         grund = regel.grund
     else:
@@ -493,4 +574,4 @@ def einordnen(mail, regelwerk, lerner, einst, ki=None):
 def _notiz(v):
     return regeln.Ergebnis(regeln.NOTIZ, v.grund, thema=v.thema,
                            unterordner=v.unterordner, personen=list(v.personen),
-                           konfidenz=v.konfidenz, durch=v.durch)
+                           konfidenz=v.konfidenz, durch=v.durch, mail_drive=v.mail_drive)

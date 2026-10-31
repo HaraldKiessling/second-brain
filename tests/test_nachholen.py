@@ -123,3 +123,20 @@ def test_mail_seite_ersetzt_fremden_zeichensatz_und_skripte():
 def test_pdf_name_ohne_verbotene_zeichen():
     assert drive.mail_pdf_name({'erstellt': '2026-10-28'}, 'Re: Buchung 12/2026') == \
         '2026-10-28 Mail Re Buchung 12 2026.pdf'
+
+
+def test_pdf_abgewaehlt_kommt_in_den_papierkorb(repo, tmp_path):
+    anh = str(tmp_path / 'anh')
+    pfad = wie_web_app(repo, BUCHUNG, mail_drive=True)
+    mail.nachholen(repo, 'gmx', holen_aus(BUCHUNG), anh)
+    f = Fake()
+    drive.abgleichen(repo, f.bruecke, anh)
+    n = notiz(repo, 'notizen', '2026', 'edv', NID + '.md')
+    del n.meta['mail_drive']                       # in der Web-App abgewaehlt
+    with open(pfad, 'w', encoding='utf-8') as fh:
+        fh.write(nz.schreiben(n))
+    f.aufrufe.clear()
+    assert drive.abgleichen(repo, f.bruecke) == (0, 1)
+    assert f.aufrufe == [{'aktion': 'loeschen', 'ordner_id': EDV, 'pfad': 'reisen',
+                          'name': '2026-10-28 Mail Buchungsbestätigung.pdf'}]
+    assert 'mail_pdf' not in notiz(repo, 'notizen', '2026', 'edv', NID + '.md').meta

@@ -26,7 +26,9 @@ def _ki(wurzel, einst):
     return einordnen.KI(schluessel, einst['ki']['modell'], daten.themen(wurzel),
                         daten.kontext(wurzel).personen, einst['ki']['max_pro_lauf'],
                         hinweise=einst['ki']['hinweise'],
-                        unterordner=daten.bekannte_unterordner(wurzel))
+                        unterordner=daten.bekannte_unterordner(wurzel),
+                        beispiele=einordnen.beispiele_aus_notizen(daten.notiz_pfade(wurzel),
+                                                                  daten.themen(wurzel)))
 
 
 def _einordnen(args):

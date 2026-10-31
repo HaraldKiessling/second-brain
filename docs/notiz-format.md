@@ -37,7 +37,8 @@ Verknüpft: [[IONOS]]
 | `absender` | nein | Mail-Adresse des Absenders; daraus lernt die Heuristik |
 | `umsaetze` | nein | Verweise auf verknüpfte Umsätze, `<konto>/<datum>/<nr>` |
 | `anhaenge`, `drive` | nein | Dateinamen der Anhänge und ihr Ort in Drive (`<ordner-id>:<pfad>`) |
-| `mail_drive`, `mail_pdf` | nein | Mail soll als PDF in den Drive-Ordner (Web-App, Reiter Mails); `mail_pdf` ist ihr Ort, sobald sie dort liegt |
+| `mail_drive`, `mail_pdf` | nein | Mail soll als PDF in den Drive-Ordner (Web-App, Regel, gelernt oder KI-Vorschlag); `mail_pdf` ist ihr Ort, sobald sie dort liegt; ohne `mail_drive` kommt ein vorhandenes PDF in den Papierkorb |
+| `ohne_anhang` | nein | Mail ohne Dokument, trotzdem abgelegt; daraus lernt das Einordnen, dass dieser Absender wichtig ist |
 | `nachholen` | nein | in der Web-App aus dem Index abgelegt; der nächste Abruf holt vollständigen Text und Anhänge (`second-brain nachholen`), sonst `nachholen_fehler` |
 
 Die `ablage` darf mehrstufig sein (`0-2026/31 Harald/ionos/rechnungen`). In Regeln und Vorschlägen werden `{jahr}` und `{monat}` im Unterordner durch das Datum der Mail ersetzt.
@@ -52,7 +53,7 @@ Regeln für Mails liegen im Daten-Repo unter `regeln/mail.json`. Ablauf und Must
 
 ## Einordnen in Stufen
 
-`src/second_brain/einordnen.py` entscheidet für jede Mail: Regel, Spam-Wert, Heuristik, optional KI. Notiz oder Eingang wird nur eine Mail mit Dokument-Anhang (Bilder unter 50 KB zählen nicht, das sind Logos); ohne Dokument bleibt es beim Indexeintrag. Ausnahmen: eine Regel mit `"ohne_anhang": true` und Mails von `eigene_adressen` (was du dir selbst schickst). Regeln können Absender, Empfänger (An/Cc) und Betreff prüfen; alle angegebenen Muster müssen passen. Einstellbar sind Schwelle, Spam-Schwelle und KI in `config/einordnen.yaml`, das Ablagewissen steht in `config/ablagewissen.yaml` (Beispiele in `beispiel-daten/config/`). Wie eine Mail eingeordnet würde, zeigt:
+`src/second_brain/einordnen.py` entscheidet für jede Mail: Regel, Spam-Wert, Heuristik, optional KI. Notiz oder Eingang wird nur eine Mail mit Dokument-Anhang (Bilder unter 50 KB zählen nicht, das sind Logos); ohne Dokument bleibt es beim Indexeintrag. Ausnahmen: eine Regel mit `"ohne_anhang": true` und Mails von `eigene_adressen` (was du dir selbst schickst). Hat Harald schon eine Mail eines Absenders ohne Anhang abgelegt, gilt das auch für die nächste; sonst fragt die KI (falls aktiv), ob eine Mail ohne Anhang wichtig ist (Buchung, Vertrag, Termin …), und legt sie mit Vorschlag in den Eingang. Die KI bekommt dafür bis zu 30 bisherige Ablagen als Beispiele. Regeln können zusätzlich `"mail_drive": true` haben: dann kommt die Mail selbst als PDF in den Drive-Ordner. Regeln können Absender, Empfänger (An/Cc) und Betreff prüfen; alle angegebenen Muster müssen passen. Einstellbar sind Schwelle, Spam-Schwelle und KI in `config/einordnen.yaml`, das Ablagewissen steht in `config/ablagewissen.yaml` (Beispiele in `beispiel-daten/config/`). Wie eine Mail eingeordnet würde, zeigt:
 
 ```
 second-brain einordnen <daten-repo> "IONOS <rechnung@ionos.de>" "Ihre Rechnung" --anhang rechnung.pdf
