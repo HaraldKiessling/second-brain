@@ -241,8 +241,12 @@ def test_ki_nur_fuer_relevante_mails_und_mit_budget(repo):
                           max_anfragen=1)
     lauf(repo, [m('freund@mail.de', 'Grillen'),
                 m('a@x.de', 'Brief 1', anhang='1.pdf'),
-                m('b@y.de', 'Brief 2', anhang='2.pdf')], ki)
-    assert len(gesendet) == 1
+                m('b@y.de', 'Brief 2', anhang='2.pdf'),
+                m('c@z.de', 'Noch eine')], ki)
+    # je eine Anfrage: "wichtig?" fuer Grillen, Ablage fuer Brief 1 (getrennte Budgets)
+    assert len(gesendet) == 2
+    assert 'kein Dokument' in gesendet[0]['messages'][0]['content']
+    assert 'Brief 1' in gesendet[1]['messages'][0]['content']
 
 
 # --- Einstellungen, Pruefung, Kommandozeile --------------------------------
@@ -339,3 +343,77 @@ def test_lauf_wird_fuer_die_uebersicht_protokolliert(repo):
     [e] = zeile['eintraege']
     assert e['pfad'].startswith('notizen/2026/edv/') and e['durch'] == 'regel/hoster'
     assert mail.lauf_protokollieren(repo, 'gmx', mail.Bilanz(), jetzt) is None
+
+
+# --- Wichtig ohne Anhang, Mail als PDF --------------------------------------
+
+def test_ki_haelt_mail_ohne_anhang_fuer_wichtig_vorschlag_im_eingang(repo):
+    ki, gesendet = ki_mit({'wichtig': True, 'pdf': True, 'vorschlaege': [
+        {'thema': 'steuer', 'unterordner': 'reisen', 'personen': ['anna'], 'konfidenz': 0.95,
+         'grund': 'Buchungsbestaetigung'}]})
+    b = lauf(repo, [m('buchung@hotel.de', 'Ihre Buchungsbestätigung')], ki)
+    assert (b.index, b.notiz, b.offen) == (0, 0, 1)   # nie ohne Rueckfrage
+    e = eingang(repo)[0].meta
+    assert e['offen_grund'].startswith('KI hält die Mail für wichtig')
+    assert e['vorschlag']['mail_drive'] is True and e['ohne_anhang'] is True
+
+
+def test_ki_nicht_wichtig_bleibt_index_spam_wird_nicht_gefragt(repo):
+    ki, gesendet = ki_mit({'wichtig': False, 'vorschlaege': [
+        {'thema': 'steuer', 'personen': ['anna'], 'konfidenz': 0.9}]})
+    b = lauf(repo, [m('shop@laden.de', 'Ihr Paket ist unterwegs'),
+                    m('Shop <news@shop.de>', 'Neue Produkte', kopf=NEWSLETTER)], ki)
+    assert b.offen == 0 and b.notiz == 0
+    assert len(gesendet) == 1
+
+
+def test_ki_bekommt_bisherige_ablage_als_beispiele(repo):
+    notiz_ablegen(repo, 'n1', 'post@praxis.de', 'versicherungen', '0-2026/08Versicherungen/praxis')
+    ki, gesendet = ki_mit({'wichtig': False},
+                          beispiele=eo.beispiele_aus_notizen(daten.notiz_pfade(repo),
+                                                             daten.themen(repo)))
+    lauf(repo, [m('x@neu.de', 'Hallo')], ki)
+    assert 'praxis.de | n1 -> versicherungen/praxis' in gesendet[0]['messages'][0]['content']
+
+
+def notiz_ohne_anhang(repo, nid, absender, mail_drive=False):
+    pfad = os.path.join(repo, 'notizen', '2026', 'steuer', nid + '.md')
+    os.makedirs(os.path.dirname(pfad), exist_ok=True)
+    meta = {'id': nid, 'erstellt': datetime.date(2026, 5, 1), 'quelle': 'gmx',
+            'personen': ['anna'], 'themen': ['steuer'], 'ablage': '0-2026/09Steuer/hotel',
+            'absender': absender, 'eingeordnet_durch': 'manuell', 'ohne_anhang': True}
+    if mail_drive:
+        meta['mail_drive'] = True
+    with open(pfad, 'w', encoding='utf-8') as fh:
+        fh.write(nz.schreiben(nz.Notiz(meta=meta, text='# %s\n' % nid)))
+
+
+def test_gelernt_absender_ohne_anhang_wird_mit_pdf_abgelegt(repo, tmp_path):
+    notiz_ohne_anhang(repo, 'h1', 'buchung@hotel.de', mail_drive=True)
+    notiz_ohne_anhang(repo, 'h2', 'buchung@hotel.de', mail_drive=True)
+    ablage = mail.Ablage(repo, 'gmx', anhang_ziel=str(tmp_path / 'anh'), heute=HEUTE)
+    b = mail.verarbeiten([m('Hotel <buchung@hotel.de>', 'Buchung Dezember')], ablage,
+                         daten.regelwerk(repo), daten.lerner(repo), daten.einstellungen(repo))
+    assert b.notiz == 1
+    [e] = b.eintraege
+    n = nz.lesen(open(os.path.join(repo, e['pfad']), encoding='utf-8').read())
+    assert n.meta['mail_drive'] is True and n.meta['ablage'] == '0-2026/09Steuer/hotel'
+    assert (tmp_path / 'anh' / n.meta['id'] / mail.MAIL_SEITE).exists()
+
+
+def test_einmal_ohne_anhang_abgelegt_gibt_vorschlag_im_eingang(repo):
+    notiz_ohne_anhang(repo, 'h1', 'buchung@hotel.de')
+    b = lauf(repo, [m('buchung@hotel.de', 'Buchung Januar')])
+    assert b.offen == 1
+    assert eingang(repo)[0].meta['offen_grund'].startswith('ohne Anhang, aber von dir')
+
+
+def test_regel_mit_mail_drive_und_regelvorschlag_ohne_anhang(repo):
+    notiz_ohne_anhang(repo, 'h1', 'buchung@hotel.de', mail_drive=True)
+    notiz_ohne_anhang(repo, 'h2', 'buchung@hotel.de', mail_drive=True)
+    [v] = daten.regelvorschlaege_schreiben(repo)
+    assert v['ohne_anhang'] is True and v['mail_drive'] is True
+    regelwerk = {'regeln': [dict(v, name='hotel')]}
+    e = eo.einordnen(m('buchung@hotel.de', 'Buchung'), regelwerk, daten.lerner(repo),
+                     daten.einstellungen(repo))
+    assert e.aktion == 'notiz' and e.mail_drive

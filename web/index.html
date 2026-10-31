@@ -67,6 +67,7 @@
           <select id="mails-art">
             <option value="">alle</option>
             <option value="notiz">Notizen</option>
+            <option value="drive">in Google Drive</option>
             <option value="eingang">im Eingang</option>
             <option value="index">nur im Index</option>
             <option value="verworfen">verworfen</option>
@@ -120,6 +121,7 @@
         <label>Empfänger (An/Cc) enthält (mit Komma trennen) <input name="empfaenger"></label>
         <label>Betreff enthält (mit Komma trennen) <input name="betreff"></label>
         <label><input type="checkbox" name="ohne_anhang" style="display:inline;width:auto"> auch Mails ohne Anhang als Notiz ablegen</label>
+        <label><input type="checkbox" name="mail_drive" style="display:inline;width:auto"> Mail zusätzlich als PDF in den Drive-Ordner legen</label>
         <label>Thema <select name="thema" required></select></label>
         <label>Unterordner in der Ablage <input name="unterordner" placeholder="z. B. ionos/rechnungen/{jahr}"></label>
         <fieldset><legend>Personen</legend><div id="regel-personen"></div></fieldset>
