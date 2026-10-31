@@ -310,6 +310,8 @@ class Ablage:
                 'message_id': mail.message_id, 'absender': eo.adresse(mail.absender)}
         if mail.dokumente:
             meta['anhaenge'] = [os.path.basename(n) for n, _ in mail.dokumente]
+        if not mail.hat_dokument:
+            meta['ohne_anhang'] = True
         if ergebnis.aktion == regeln.NOTIZ:
             thema = self.themen.get(ergebnis.thema, {})
             ablage = '/'.join(t for t in (jahr_ordner(mail.datum, self.heute),
@@ -321,6 +323,8 @@ class Ablage:
                         ablage=ablage, eingeordnet_durch=durch)
             if ergebnis.konfidenz < 1:
                 meta['konfidenz'] = round(ergebnis.konfidenz, 2)
+            if ergebnis.mail_drive:
+                meta['mail_drive'] = True
             pfad = self._pfad('notizen', str(mail.datum.year), ergebnis.thema, nid + '.md')
             self._protokoll(durch, 'Notiz `%s` angelegt (%s)' % (nid, ergebnis.grund))
         else:
@@ -333,6 +337,10 @@ class Ablage:
         with open(pfad, 'w', encoding='utf-8') as fh:
             fh.write(nz.schreiben(nz.Notiz(meta=meta, text=notiz_text(mail))))
         anhaenge_sichern(self.anhang_ziel, nid, mail)
+        if meta.get('mail_drive'):
+            seite_sichern(self.anhang_ziel, nid, mail_seite(
+                mail.absender, mail.datum.isoformat(), mail.betreff, mail.text, mail.html,
+                mail.empfaenger))
         self.bekannt.add(mail.message_id)
         return pfad
 
@@ -356,6 +364,15 @@ def anhaenge_sichern(anhang_ziel, nid, mail):
     for name, inhalt in mail.dokumente:
         with open(os.path.join(ziel, os.path.basename(name)), 'wb') as fh:
             fh.write(inhalt)
+
+
+def seite_sichern(anhang_ziel, nid, seite):
+    if not anhang_ziel:
+        return
+    ziel = os.path.join(anhang_ziel, nid)
+    os.makedirs(ziel, exist_ok=True)
+    with open(os.path.join(ziel, MAIL_SEITE), 'w', encoding='utf-8') as fh:
+        fh.write(seite)
 
 
 def mail_seite(absender, datum, betreff, text, html='', empfaenger=''):
@@ -436,10 +453,7 @@ def nachholen(wurzel, konto, holen, anhang_ziel=None):
                 text = re.sub(r'^# .*\n+', '', n.text)
                 seite = mail_seite(n.meta.get('absender', ''), str(n.meta.get('erstellt')),
                                    n.titel, text)
-            ziel = os.path.join(anhang_ziel, n.meta['id'])
-            os.makedirs(ziel, exist_ok=True)
-            with open(os.path.join(ziel, MAIL_SEITE), 'w', encoding='utf-8') as fh:
-                fh.write(seite)
+            seite_sichern(anhang_ziel, n.meta['id'], seite)
         with open(pfad, 'w', encoding='utf-8') as fh:
             fh.write(nz.schreiben(n))
     return fertig, fehlt

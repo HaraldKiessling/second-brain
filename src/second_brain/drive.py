@@ -11,8 +11,9 @@ Ort, den die Notiz beschreibt:
   Agentenkontos, bis die Mail eingeordnet ist.
 
 Ist `mail_drive` gesetzt (Web-App: "Mail als PDF in Drive"), kommt die Mail
-selbst als PDF dazu: der Nachholen-Schritt legt sie als HTML-Seite in den
-Anhang-Ordner, die Bruecke wandelt sie um. Ihr Ort steht als `mail_pdf`.
+selbst als PDF dazu: der Abruf oder der Nachholen-Schritt legt sie als
+HTML-Seite in den Anhang-Ordner, die Bruecke wandelt sie um. Ihr Ort steht als
+`mail_pdf`; wird `mail_drive` abgewaehlt, kommt das PDF in den Papierkorb.
 
 Wo die Dateien gerade liegen, steht als `drive` in der Notiz ("<ordner-id>:
 <pfad>", leere ID = Wurzel des Agentenkontos). Weicht das vom Ziel ab, weil die
@@ -87,6 +88,14 @@ class Bruecke:
         except DriveFehler as e:
             raise DriveFehler(BRUECKE_ALT) if 'Unbekannte Aktion' in str(e) else e
 
+    def loeschen(self, ort, name):
+        """Datei in den Papierkorb (dort 30 Tage wiederherstellbar)."""
+        ordner_id, pfad = teilen(ort)
+        try:
+            self.aufruf('loeschen', ordner_id=ordner_id, pfad=pfad, name=name)
+        except DriveFehler as e:
+            raise DriveFehler(BRUECKE_ALT) if 'Unbekannte Aktion' in str(e) else e
+
     def verschieben(self, von, nach, name, leeren=False):
         von_id, von_pfad = teilen(von)
         ordner_id, pfad = teilen(nach)
@@ -148,11 +157,18 @@ def _anhaenge_abgleichen(n, soll, lokal, bruecke):
 
 
 def _mail_abgleichen(n, soll, lokal, bruecke):
-    """Mail als PDF ablegen oder nachziehen, wenn mail_drive gesetzt ist."""
+    """Mail als PDF ablegen oder nachziehen, wenn mail_drive gesetzt ist;
+    in der Web-App abgewaehlt, kommt das PDF in den Papierkorb."""
     ist = n.meta.get('mail_pdf')
-    if not n.meta.get('mail_drive') or ist == soll:
-        return None
     name = mail_pdf_name(n.meta, n.titel)
+    if not n.meta.get('mail_drive'):
+        if ist is None:
+            return None
+        bruecke.loeschen(ist, name)
+        del n.meta['mail_pdf']
+        return 'verschoben'
+    if ist == soll:
+        return None
     if ist is None:
         seite = os.path.join(lokal, mail.MAIL_SEITE)
         if not os.path.isfile(seite):

@@ -33,6 +33,7 @@ class Ergebnis:
     durch: str = ''          # wer entschieden hat: regel/<name>, heuristik/..., ki/<modell>
     vorschlag: object = None  # einordnen.Vorschlag bei offen
     spam: float = 0.0
+    mail_drive: bool = False  # Mail selbst als PDF in die Drive-Ablage
 
 
 def _trifft(muster, text):
@@ -75,7 +76,8 @@ def einordnen(absender, betreff, hat_dokument, regelwerk, empfaenger=''):
         return Ergebnis(NOTIZ, 'Regel ' + r['name'], regel=r['name'],
                         thema=r['thema'], unterordner=r.get('unterordner', ''),
                         personen=list(r.get('personen') or
-                                      regelwerk.get('standard_personen', [])))
+                                      regelwerk.get('standard_personen', [])),
+                        mail_drive=bool(r.get('mail_drive')))
 
     if not hat_dokument:
         return Ergebnis(INDEX, 'keine Regel, kein Dokument-Anhang')

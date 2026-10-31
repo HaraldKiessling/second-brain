@@ -413,6 +413,10 @@ function eingangKarte(e) {
   karte.append(vb);
 
   const felder = auswahlFelder(v || {});
+  const pdf = pdfHaken(!!(v && v.mail_drive));
+  felder.append(pdf);
+  const wertMitPdf = felder.wert;
+  felder.wert = () => ({ ...wertMitPdf(), mail_drive: pdf.an() });
   const alternativen = (v && v.alternativen) || [];
   if (alternativen.length) {
     const wahl = document.createElement('div');
@@ -456,6 +460,17 @@ function eingangKarte(e) {
   return karte;
 }
 
+function pdfHaken(an, text = 'Mail zusätzlich als PDF in den Drive-Ordner legen (z. B. Buchungsbestätigung)') {
+  const l = document.createElement('label');
+  l.className = 'haken';
+  const c = document.createElement('input');
+  c.type = 'checkbox';
+  c.checked = an;
+  l.append(c, text);
+  l.an = () => c.checked;
+  return l;
+}
+
 function auswahlPruefen(w) {
   if (!(w.thema in zustand.themen)) return 'Bitte ein Thema wählen.';
   if (!w.personen.length) return 'Mindestens eine Person wählen.';
@@ -477,7 +492,7 @@ async function eingangAblegen(e, w, durch, wie = 'aus Eingang abgelegt', weitere
   meta.ablage = [jahrOrdner(datum), thema.ablage, unterordnerEinsetzen(w.unterordner, datum)].filter(Boolean).join('/');
   meta.eingeordnet_durch = durch;
   if (w.mail_drive) meta.mail_drive = true;
-  else if ('mail_drive' in w && !meta.mail_pdf) delete meta.mail_drive;
+  else if ('mail_drive' in w) delete meta.mail_drive;  // liegt schon ein PDF, raeumt der Abruf es weg
   if (!meta.absender && absenderAdresse(e)) meta.absender = absenderAdresse(e);
   const ziel = `notizen/${datum.slice(0, 4)}/${w.thema}/${meta.id}.md`;
   const heute = new Date().toISOString().slice(0, 10);
@@ -661,10 +676,11 @@ async function zeigeMails(neu = true) {
   }
   const art = $('#mails-art').value;
   const suche = $('#mails-suche').value.trim().toLowerCase();
-  const passt = (m) => (!art || m.art === art) && (!suche || mailText(m).toLowerCase().includes(suche));
+  const inDrive = (m) => m.art === 'notiz' && !!(m.meta.drive || m.meta.mail_pdf || m.meta.mail_drive);
+  const passt = (m) => (!art || m.art === art || (art === 'drive' && inDrive(m))) && (!suche || mailText(m).toLowerCase().includes(suche));
   const gezeigt = zustand.mails.filter(passt);
   const zahl = (a) => zustand.mails.filter((m) => m.art === a).length;
-  $('#mails-zahl').textContent = `${zustand.mails.length} Mails: ${zahl('notiz')} Notizen, ${zahl('eingang')} im Eingang, ${zahl('index')} nur im Index, ${zahl('verworfen')} verworfen.`;
+  $('#mails-zahl').textContent = `${zustand.mails.length} Mails: ${zahl('notiz')} Notizen (${zustand.mails.filter(inDrive).length} mit Dateien in Drive), ${zahl('eingang')} im Eingang, ${zahl('index')} nur im Index, ${zahl('verworfen')} verworfen.`;
   liste.textContent = '';
   for (const m of gezeigt.slice(0, 200)) liste.append(mailKarte(m));
   if (!gezeigt.length) { const p = document.createElement('p'); p.className = 'hinweis'; p.textContent = 'Keine passenden Mails.'; liste.append(p); }
@@ -687,11 +703,12 @@ function driveStand(meta) {
   if (meta.nachholen) zeilen.push(['Vollständige Mail und Anhänge werden beim nächsten Abruf aus dem Postfach geholt.', 'warn']);
   if (meta.nachholen_fehler) zeilen.push([meta.nachholen_fehler, 'warn']);
   if ((meta.anhaenge || []).length) {
-    const n = meta.anhaenge.length === 1 ? 'Anhang' : `${meta.anhaenge.length} Anhänge`;
+    const n = `${meta.anhaenge.length === 1 ? 'Anhang' : 'Anhänge'} ${meta.anhaenge.join(', ')}`;
     if (!meta.drive) zeilen.push([`${n}: noch nicht in Drive.`, 'warn']);
     else if (meta.drive === soll) zeilen.push([`${n} in Drive.`, 'gut']);
     else zeilen.push([`${n}: werden beim nächsten Abruf verschoben.`, 'warn']);
   }
+  if (!meta.mail_drive && meta.mail_pdf) zeilen.push(['Mail als PDF: kommt beim nächsten Abruf in den Drive-Papierkorb.', 'warn']);
   if (meta.mail_drive) {
     if (!meta.mail_pdf) zeilen.push(['Mail als PDF: wird beim nächsten Abruf in Drive abgelegt.', 'warn']);
     else if (meta.mail_pdf === soll) zeilen.push(['Mail als PDF in Drive.', 'gut']);
@@ -766,27 +783,25 @@ function mailFormular(m, karte, knoepfe, fehler) {
   const z = m.zeile;
   const vorgabe = z ? {} : { thema: (m.meta.themen || [])[0], unterordner: unterordnerAusAblage(m.meta.ablage, (m.meta.themen || [])[0]), personen: m.meta.personen };
   const felder = auswahlFelder(vorgabe);
-  const haken = document.createElement('label');
-  haken.className = 'haken';
-  const pdf = document.createElement('input');
-  pdf.type = 'checkbox';
-  pdf.checked = !!(m.meta && m.meta.mail_drive);
-  pdf.disabled = !!(m.meta && m.meta.mail_pdf);
-  haken.append(pdf, pdf.disabled ? 'Mail liegt als PDF in Drive (zieht beim Umhängen mit)' : 'Mail zusätzlich als PDF in den Drive-Ordner legen (z. B. Buchungsbestätigung)');
+  const liegt = !!(m.meta && m.meta.mail_pdf);
+  const haken = pdfHaken(!!(m.meta && m.meta.mail_drive),
+    liegt ? 'Mail als PDF in Drive (Haken weg: PDF kommt in den Papierkorb)' : undefined);
   const hinweis = document.createElement('p');
   hinweis.className = 'hinweis';
   hinweis.textContent = z ? 'Der nächste Abruf holt die vollständige Mail mit Anhängen aus dem Postfach. Er wird gleich gestartet.'
     : 'Liegen Anhänge oder das Mail-PDF schon in Drive, verschiebt der nächste Abruf sie in den neuen Ordner.';
   const speichern = knopf('Speichern', async () => {
     fehler.textContent = '';
-    const w = { ...felder.wert(), mail_drive: pdf.checked };
+    const w = { ...felder.wert(), mail_drive: haken.an() };
     const f = auswahlPruefen(w);
     if (f) { fehler.textContent = f; return; }
     speichern.disabled = true;
     try {
-      const nachAbruf = z ? true : (w.mail_drive && !m.meta.mail_drive) || (m.meta.drive || m.meta.mail_pdf);
+      const nachAbruf = z ? true : (w.mail_drive !== !!m.meta.mail_drive) || (m.meta.drive || m.meta.mail_pdf);
+      const wie = w.mail_drive && !m.meta.mail_drive ? 'korrigiert, Mail als PDF für Drive vorgemerkt'
+        : !w.mail_drive && m.meta.mail_drive ? 'korrigiert, Mail-PDF abgewählt' : 'korrigiert';
       if (z) await indexAblegen(m, w);
-      else await eingangAblegen(m, w, 'manuell', w.mail_drive && !m.meta.mail_drive ? 'korrigiert, Mail als PDF für Drive vorgemerkt' : 'korrigiert');
+      else await eingangAblegen(m, w, 'manuell', wie);
       if (nachAbruf) await abrufStarten();
       await zeigeMails();
     } catch (err) { fehler.textContent = err.message; speichern.disabled = false; }
@@ -802,7 +817,7 @@ async function indexAblegen(m, w) {
   const basis = `${z.datum}-${slug(absenderKurz(z.absender), 20)}-${slug(z.betreff || '', 40)}`;
   let id = basis;
   for (let n = 2; zustand.pfade.some((p) => p.endsWith(`/${id}.md`)); n++) id = `${basis}-${n}`;
-  const meta = { id, erstellt: z.datum, quelle: z.konto, personen: [], themen: [], message_id: z.message_id, absender: adresseVon(z.absender), nachholen: true };
+  const meta = { id, erstellt: z.datum, quelle: z.konto, personen: [], themen: [], message_id: z.message_id, absender: adresseVon(z.absender), nachholen: true, ohne_anhang: true };
   const text = `# ${(z.betreff || '').trim() || '(ohne Betreff)'}\n\nVon: ${z.absender}  \nDatum: ${z.datum}\n\n${z.kurz || ''}\n`;
   const index = `index/mail/${z.datum.slice(0, 7)}.jsonl`;
   await eingangAblegen({ pfad: '', meta, text }, w, 'manuell', 'aus dem Index abgelegt', async () => {
@@ -850,7 +865,8 @@ async function regelAusMail(e, w) {
   await zeigeReiter('regeln');
   zustand.regelVonMail = e;
   zustand.regelVonVorschlag = null;
-  regelFormular(-1, { name, absender: [domain], thema: w.thema, unterordner: w.unterordner, personen: w.personen });
+  regelFormular(-1, { name, absender: [domain], thema: w.thema, unterordner: w.unterordner, personen: w.personen,
+    ...(e.meta.ohne_anhang ? { ohne_anhang: true } : {}), ...(w.mail_drive ? { mail_drive: true } : {}) });
   $('#regel-form-titel').textContent = `Neue Regel aus Mail „${titelVon(e.text)}“`;
   melde('Prüfe die Regel. Beim Speichern wird auch diese Mail abgelegt.');
 }
@@ -888,7 +904,7 @@ async function zeigeRegeln() {
   tbody.textContent = '';
   zustand.regeln.regeln.forEach((r, i) => {
     const z = tbody.insertRow();
-    zelle(z, r.name);
+    zelle(z, r.name + (r.ohne_anhang ? ' · auch ohne Anhang' : '') + (r.mail_drive ? ' · Mail als PDF' : ''));
     zelle(z, (r.absender || []).join(', '));
     zelle(z, (r.empfaenger || []).join(', '));
     zelle(z, (r.betreff || []).join(', '));
@@ -949,6 +965,7 @@ function regelFormular(index, vorlage) {
   f.betreff.value = (r.betreff || []).join(', ');
   f.empfaenger.value = (r.empfaenger || []).join(', ');
   f.ohne_anhang.checked = !!r.ohne_anhang;
+  f.mail_drive.checked = !!r.mail_drive;
   f.unterordner.value = r.unterordner || '';
   f.thema.textContent = '';
   for (const [schluessel, t] of Object.entries(zustand.themen)) {
@@ -999,6 +1016,7 @@ async function regelAbsenden(ereignis) {
   if (liste(f.empfaenger.value).length) regel.empfaenger = liste(f.empfaenger.value);
   if (liste(f.betreff.value).length) regel.betreff = liste(f.betreff.value);
   if (f.ohne_anhang.checked) regel.ohne_anhang = true;
+  if (f.mail_drive.checked) regel.mail_drive = true;
   regel.thema = f.thema.value;
   if (f.unterordner.value.trim()) regel.unterordner = f.unterordner.value.trim();
   regel.personen = [...$('#regel-personen').querySelectorAll('input:checked')].map((c) => c.value);
