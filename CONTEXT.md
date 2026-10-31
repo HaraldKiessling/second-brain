@@ -73,7 +73,7 @@ Die nachvollziehbare Liste aller Änderungen, die die KI beim **Einordnen** oder
 _Avoid_: Log
 
 **Zugangsdaten**:
-Was ein **Adapter** braucht, um seine **Quelle** zu erreichen (Adresse, Passwort, API-Schlüssel). Sie liegen als GitHub-Secret und sind danach nicht mehr lesbar; die einzige lesbare Kopie hat Haralds Google Passwortmanager, und zwar nur einmal (ein GMX-Passwort, das Chrome schon unter gmx.net kennt, wird nicht zusätzlich unter der Web-App gespeichert).
+Was ein **Adapter** braucht, um seine **Quelle** zu erreichen (Adresse, Passwort, API-Schlüssel). Sie liegen als GitHub-Secret und sind danach nicht mehr lesbar; die einzige lesbare Kopie hat Haralds Google Passwortmanager. Für Mail-Konten sind es App-Passwörter, nie das normale Konto-Passwort, deshalb liegt nichts doppelt.
 _Avoid_: Credentials, Login, Secret (für den Wert selbst)
 
 ## Relationships
