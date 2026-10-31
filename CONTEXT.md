@@ -72,6 +72,10 @@ _Avoid_: Refactoring, Aufräumen
 Die nachvollziehbare Liste aller Änderungen, die die KI beim **Einordnen** oder bei einem **Umbau** vorgenommen hat.
 _Avoid_: Log
 
+**Zugangsdaten**:
+Was ein **Adapter** braucht, um seine **Quelle** zu erreichen (Adresse, Passwort, API-Schlüssel). Sie liegen als GitHub-Secret und sind danach nicht mehr lesbar; die einzige lesbare Kopie hat Haralds Google Passwortmanager, und zwar nur einmal (ein GMX-Passwort, das Chrome schon unter gmx.net kennt, wird nicht zusätzlich unter der Web-App gespeichert).
+_Avoid_: Credentials, Login, Secret (für den Wert selbst)
+
 ## Relationships
 
 - Ein **Adapter** bedient genau eine **Quelle**; eine **Quelle** hat höchstens einen **Adapter**.

@@ -6,7 +6,7 @@
 // Bekannte Zugangsdaten. Namen muessen zu den Workflows im Daten-Repo passen.
 const SECRETS = [
   { name: 'MAIL_GMX_USER', wofuer: 'GMX: Mail-Adresse' },
-  { name: 'MAIL_GMX_PASSWORD', wofuer: 'GMX: App-Passwort für IMAP' },
+  { name: 'MAIL_GMX_PASSWORD', wofuer: 'GMX: Passwort für IMAP' },
   { name: 'MAIL_GMAIL_USER', wofuer: 'Gmail: Mail-Adresse' },
   { name: 'MAIL_GMAIL_PASSWORD', wofuer: 'Gmail: App-Passwort (Google-Konto → Sicherheit → App-Passwörter)' },
   { name: 'OPENROUTER_API_KEY', wofuer: 'KI-Einordnen (optional, einschalten in config/einordnen.yaml)' },
@@ -132,7 +132,7 @@ function zeigeReiter(name) {
   document.querySelectorAll('.reiter').forEach((s) => { s.hidden = s.id !== name; });
   document.querySelectorAll('#reiter button').forEach((b) => b.classList.toggle('aktiv', b.dataset.reiter === name));
   merke('sb-reiter', name);
-  return ({ uebersicht: zeigeUebersicht, eingang: zeigeEingang, mails: zeigeMails, zugang: () => { driveCodeZeigen(); return zeigeSecrets(); }, regeln: zeigeRegeln, dateien: zeigeDatei, ablaeufe: zeigeLaeufe })[name]();
+  return ({ uebersicht: zeigeUebersicht, eingang: zeigeEingang, mails: zeigeMails, zugang: () => { driveCodeZeigen(); kontenZeigen(); return zeigeSecrets(); }, regeln: zeigeRegeln, dateien: zeigeDatei, ablaeufe: zeigeLaeufe })[name]();
 }
 
 function zelle(zeile, text, klasse) {
@@ -170,19 +170,122 @@ async function zeigeSecrets() {
     zelle(z, s.wofuer, 'hinweis');
     const stand = gesetzt.get(s.name);
     zelle(z, stand ? 'gesetzt ' + new Date(stand).toLocaleDateString('de-DE') : 'fehlt', stand ? 'gut' : 'warn');
-    z.insertCell().append(knopf(stand ? 'Ändern' : 'Setzen', () => secretAbfragen(s.name)));
+    z.insertCell().append(knopf(stand ? 'Ändern' : 'Setzen', () => secretBearbeiten(s.name)));
   }
 }
 
-async function secretAbfragen(name) {
-  const wert = prompt(`Neuer Wert für ${name}:`);
-  if (!wert) return;
+// Ein Formular pro Konto mit Nutzername und Passwort, damit der Google
+// Passwortmanager beides ausfuellt. Gespeichert wird nur, wo Chrome das
+// Passwort nicht schon unter einer anderen Seite kennt (GMX-Passwort liegt
+// meist unter gmx.net; doppelt soll es nicht liegen).
+const KONTEN = [
+  { id: 'gmx', titel: 'GMX', feld: 'Passwort', nutzer: 'MAIL_GMX_USER', passwort: 'MAIL_GMX_PASSWORD', typ: 'email', speichern: false,
+    hinweis: 'Ins Passwortfeld tippen und „Andere Passwörter“ wählen, dann den Eintrag von gmx.net nehmen. Nur speichern lassen, wenn es ein eigenes App-Passwort ist.' },
+  { id: 'gmail', titel: 'Gmail', feld: 'App-Passwort', nutzer: 'MAIL_GMAIL_USER', passwort: 'MAIL_GMAIL_PASSWORD', typ: 'email', speichern: true,
+    hinweis: 'Google zeigt ein App-Passwort nur einmal an. Lass es Chrome nach dem Speichern gleich merken.' },
+  { id: 'openrouter', titel: 'OpenRouter', feld: 'Schlüssel', fest: 'OpenRouter', passwort: 'OPENROUTER_API_KEY', speichern: true,
+    hinweis: 'Den Schlüssel zeigt OpenRouter nur einmal an. Lass ihn Chrome nach dem Speichern merken.' },
+];
+
+function kontenZeigen() {
+  const ziel = $('#konten');
+  if (ziel.childElementCount) return;
+  for (const k of KONTEN) ziel.append(kontoFormular(k));
+}
+
+function kontoFormular(k) {
+  const form = document.createElement('form');
+  form.className = 'karte konto';
+  form.id = 'konto-' + k.id;
+  const h = document.createElement('h3');
+  h.textContent = k.titel;
+  const nutzer = document.createElement('input');
+  nutzer.name = 'username';
+  nutzer.autocomplete = 'username';
+  if (k.fest) { nutzer.value = k.fest; nutzer.readOnly = true; } else { nutzer.type = k.typ; nutzer.placeholder = 'Adresse (leer lassen, wenn unverändert)'; }
+  const passwort = document.createElement('input');
+  passwort.name = 'password';
+  passwort.type = 'password';
+  passwort.autocomplete = k.speichern ? 'new-password' : 'current-password';
+  const haken = document.createElement('input');
+  haken.type = 'checkbox';
+  haken.checked = k.speichern;
+  const hinweis = document.createElement('p');
+  hinweis.className = 'hinweis';
+  hinweis.textContent = k.hinweis;
+  const knopfSpeichern = document.createElement('button');
+  knopfSpeichern.type = 'submit';
+  knopfSpeichern.textContent = 'Speichern';
+  form.append(h, beschriftet(k.fest ? 'Nutzername' : 'Mail-Adresse', nutzer), beschriftet(k.feld, passwort),
+    hinweis, beschriftet('Chrome soll das Passwort speichern', haken, 'haken'), knopfSpeichern);
+  form.addEventListener('submit', (e) => { e.preventDefault(); kontoSpeichern(k, form, haken.checked); });
+  return form;
+}
+
+function beschriftet(text, feld, klasse) {
+  const l = document.createElement('label');
+  if (klasse) { l.className = klasse; l.append(feld, ' ' + text); } else l.append(text + ' ', feld);
+  return l;
+}
+
+async function kontoSpeichern(k, form, speichern) {
+  const nutzer = form.elements.username;
+  const passwort = form.elements.password;
+  const adresse = k.fest ? '' : nutzer.value.trim();
+  const wert = passwort.value;
+  if (!wert && !adresse) { melde('Bitte Adresse oder Passwort eingeben.', 'fehler'); return; }
+  if (!speichern) {
+    // Feld ersetzen, bevor die Anfrage laeuft: Chrome sieht dann kein
+    // erfolgreich abgeschicktes Passwort und bietet kein Speichern an.
+    const leer = passwort.cloneNode();
+    leer.value = '';
+    passwort.replaceWith(leer);
+  }
+  try {
+    melde('Speichere ' + k.titel + ' …');
+    if (adresse) await secretSetzen(k.nutzer, adresse);
+    if (wert) await secretSetzen(k.passwort, wert);
+  } catch (e) { melde(e.message, 'fehler'); return; }
+  melde(k.titel + ' gespeichert.', 'gut');
+  if (speichern) {
+    // Ausblenden nach erfolgreicher Anfrage ist Chromes Zeichen fuer
+    // „Anmeldung geklappt“, dann bietet er das Speichern an.
+    form.hidden = true;
+    const fertig = document.createElement('div');
+    fertig.className = 'karte';
+    fertig.append(k.titel + ' gespeichert. ', knopf('Erneut ändern', () => { form.remove(); fertig.replaceWith(kontoFormular(k)); }, 'klein'));
+    form.after(fertig);
+    setTimeout(() => form.remove(), 5000);
+  }
+  zeigeSecrets();
+}
+
+function secretBearbeiten(name) {
+  const konto = KONTEN.find((k) => k.nutzer === name || k.passwort === name);
+  if (konto) {
+    const form = $('#konto-' + konto.id);
+    if (form) { form.scrollIntoView({ behavior: 'smooth' }); form.querySelector(name === konto.nutzer ? '[name=username]' : '[name=password]').focus(); }
+    return;
+  }
+  if (name.startsWith('DRIVE_')) { $('#drive-bereich').scrollIntoView({ behavior: 'smooth' }); return; }
+  $('#secret-neu-bereich').open = true;
+  $('#secret-neu-name').value = name;
+  $('#secret-neu-wert').focus();
+}
+
+async function weiteresSecretSpeichern(e) {
+  e.preventDefault();
+  const name = $('#secret-neu-name').value.trim().toUpperCase();
+  const wert = $('#secret-neu-wert').value;
+  if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) { melde('Name nur aus A–Z, 0–9 und _.', 'fehler'); return; }
+  if (!wert) { melde('Bitte einen Wert eingeben.', 'fehler'); return; }
   try {
     melde('Speichere ' + name + ' …');
     await secretSetzen(name, wert);
-    melde(name + ' gespeichert.', 'gut');
-    zeigeSecrets();
-  } catch (e) { melde(e.message, 'fehler'); }
+  } catch (err) { melde(err.message, 'fehler'); return; }
+  melde(name + ' gespeichert.', 'gut');
+  $('#secret-neu-bereich').open = false;
+  zeigeSecrets();
 }
 
 // Google Drive verbinden: Apps-Script im Agentenkonto als Bruecke
@@ -1114,7 +1217,8 @@ async function mailStarten() {
 
 // Anmeldung
 
-async function anmelden() {
+async function anmelden(e) {
+  e.preventDefault();
   zustand.repo = $('#repo').value.trim();
   zustand.token = $('#token').value.trim();
   try {
@@ -1143,13 +1247,10 @@ function starten() {
 
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('#reiter button').forEach((b) => b.addEventListener('click', () => zeigeReiter(b.dataset.reiter)));
-  $('#anmelden').addEventListener('click', anmelden);
+  $('#anmeldung-form').addEventListener('submit', anmelden);
   $('#abmelden').addEventListener('click', abmelden);
-  $('#secret-neu').addEventListener('click', () => {
-    const name = $('#secret-neu-name').value.trim().toUpperCase();
-    if (/^[A-Z_][A-Z0-9_]*$/.test(name)) secretAbfragen(name);
-    else melde('Name nur aus A–Z, 0–9 und _.', 'fehler');
-  });
+  $('#secret-neu-form').addEventListener('submit', weiteresSecretSpeichern);
+  $('#secret-neu-bereich').addEventListener('toggle', () => { if ($('#secret-neu-bereich').open) $('#secret-neu-wert').value = ''; });
   $('#drive-code-kopieren').addEventListener('click', async () => {
     try { await navigator.clipboard.writeText($('#drive-code').value); melde('Code kopiert.', 'gut'); } catch {
       $('#drive-code').select(); melde('Bitte markierten Code kopieren.');
