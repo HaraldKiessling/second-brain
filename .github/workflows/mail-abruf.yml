@@ -55,6 +55,14 @@ jobs:
         run: |
           second-brain mail-abruf . --konto "${{ inputs.konto }}" --host "${{ inputs.host }}" \
             --postfach "${{ inputs.postfach }}" --anhaenge "$RUNNER_TEMP/anhaenge"
+      - name: Nachholen
+        # In der Web-App als Notiz abgelegte Indexmails und "Mail als PDF in Drive"
+        env:
+          MAIL_USER: ${{ secrets.MAIL_USER }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+        run: |
+          second-brain nachholen . --konto "${{ inputs.konto }}" --host "${{ inputs.host }}" \
+            --postfach "${{ inputs.postfach }}" --anhaenge "$RUNNER_TEMP/anhaenge"
       - name: Anhaenge nach Google Drive
         id: drive
         if: env.MIT_DRIVE == 'true'

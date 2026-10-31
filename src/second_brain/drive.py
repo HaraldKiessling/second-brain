@@ -10,6 +10,10 @@ Ort, den die Notiz beschreibt:
 - Eingang oder Thema ohne Drive-ID: in einen Sammelordner im Drive des
   Agentenkontos, bis die Mail eingeordnet ist.
 
+Ist `mail_drive` gesetzt (Web-App: "Mail als PDF in Drive"), kommt die Mail
+selbst als PDF dazu: der Nachholen-Schritt legt sie als HTML-Seite in den
+Anhang-Ordner, die Bruecke wandelt sie um. Ihr Ort steht als `mail_pdf`.
+
 Wo die Dateien gerade liegen, steht als `drive` in der Notiz ("<ordner-id>:
 <pfad>", leere ID = Wurzel des Agentenkontos). Weicht das vom Ziel ab, weil die
 Mail im Eingang eingeordnet oder in der Web-App korrigiert wurde, verschiebt der
@@ -24,14 +28,19 @@ import base64
 import json
 import mimetypes
 import os
+import re
 import urllib.error
 import urllib.request
 
 import yaml
 
+from . import mail
 from . import notiz as nz
 
 SAMMELORDNER = 'Second Brain Eingang'
+BRUECKE_ALT = ('Die Drive-Bruecke kennt noch keine PDFs. In der Web-App unter Zugangsdaten '
+               'den Code neu kopieren, im Skript einfuegen und unter Bereitstellen -> '
+               'Bereitstellungen verwalten eine neue Version bereitstellen.')
 
 
 class DriveFehler(Exception):
@@ -68,6 +77,16 @@ class Bruecke:
         self.aufruf('hochladen', ordner_id=ordner_id, pfad=pfad, name=name, inhalt=inhalt,
                     typ=mimetypes.guess_type(name)[0] or 'application/octet-stream')
 
+    def pdf(self, ort, name, lokal_html):
+        """HTML-Seite als PDF ablegen (Umwandlung im Apps-Script)."""
+        ordner_id, pfad = teilen(ort)
+        with open(lokal_html, 'rb') as fh:
+            inhalt = base64.b64encode(fh.read()).decode('ascii')
+        try:
+            self.aufruf('pdf', ordner_id=ordner_id, pfad=pfad, name=name, inhalt=inhalt)
+        except DriveFehler as e:
+            raise DriveFehler(BRUECKE_ALT) if 'Unbekannte Aktion' in str(e) else e
+
     def verschieben(self, von, nach, name, leeren=False):
         von_id, von_pfad = teilen(von)
         ordner_id, pfad = teilen(nach)
@@ -78,6 +97,12 @@ class Bruecke:
 def dateiname(meta, name):
     """Datum voran, damit gleichnamige Anhaenge verschiedener Mails nicht kollidieren."""
     return '%s %s' % (meta.get('erstellt'), os.path.basename(name))
+
+
+def mail_pdf_name(meta, titel):
+    """Dateiname der Mail als PDF, z. B. "2026-10-28 Mail Ihre Buchung.pdf"."""
+    titel = re.sub(r'[\\/:*?"<>|\s]+', ' ', titel or '').strip()[:80].rstrip() or 'ohne Betreff'
+    return dateiname(meta, 'Mail %s.pdf' % titel)
 
 
 def teilen(ort):
@@ -98,10 +123,47 @@ def ziel(meta, themen):
 
 def _lokale_dokumente(verz):
     """Dateien eines Anhang-Ordners ohne kleine Bilder, wie Mail.dokumente."""
-    from .mail import BILD_ENDUNGEN, BILD_MINDESTGROESSE
-    return [d for d in sorted(os.listdir(verz))
-            if not (os.path.splitext(d)[1].lower() in BILD_ENDUNGEN
-                    and os.path.getsize(os.path.join(verz, d)) < BILD_MINDESTGROESSE)]
+    return [d for d in sorted(os.listdir(verz)) if not d.startswith('.')
+            and not (os.path.splitext(d)[1].lower() in mail.BILD_ENDUNGEN
+                     and os.path.getsize(os.path.join(verz, d)) < mail.BILD_MINDESTGROESSE)]
+
+
+def _anhaenge_abgleichen(n, soll, lokal, bruecke):
+    """Anhaenge an den Soll-Ort bringen. Liefert 'hoch', 'verschoben' oder None."""
+    namen, ist = n.meta.get('anhaenge') or [], n.meta.get('drive')
+    if not namen or ist == soll:
+        return None
+    if ist is None:
+        if not os.path.isdir(lokal):
+            return None
+        for name in namen:
+            bruecke.hochladen(soll, dateiname(n.meta, name), os.path.join(lokal, os.path.basename(name)))
+        n.meta['drive'] = soll
+        return 'hoch'
+    sammel = ist.startswith(':%s/' % SAMMELORDNER)
+    for i, name in enumerate(namen):
+        bruecke.verschieben(ist, soll, dateiname(n.meta, name), leeren=sammel and i == len(namen) - 1)
+    n.meta['drive'] = soll
+    return 'verschoben'
+
+
+def _mail_abgleichen(n, soll, lokal, bruecke):
+    """Mail als PDF ablegen oder nachziehen, wenn mail_drive gesetzt ist."""
+    ist = n.meta.get('mail_pdf')
+    if not n.meta.get('mail_drive') or ist == soll:
+        return None
+    name = mail_pdf_name(n.meta, n.titel)
+    if ist is None:
+        seite = os.path.join(lokal, mail.MAIL_SEITE)
+        if not os.path.isfile(seite):
+            return None
+        bruecke.pdf(soll, name, seite)
+        n.meta['mail_pdf'] = soll
+        return 'hoch'
+    # Die Bruecke loescht den Sammelordner nur, wenn er danach leer ist.
+    bruecke.verschieben(ist, soll, name, leeren=ist.startswith(':%s/' % SAMMELORDNER))
+    n.meta['mail_pdf'] = soll
+    return 'verschoben'
 
 
 def abgleichen(wurzel, bruecke, anhaenge=None, nachtragen=False):
@@ -125,35 +187,23 @@ def abgleichen(wurzel, bruecke, anhaenge=None, nachtragen=False):
                         n = nz.lesen(fh.read())
                     except nz.FormatFehler:
                         continue
-                namen = n.meta.get('anhaenge') or []
                 lokal = os.path.join(anhaenge or '', n.meta['id'])
-                if not namen and nachtragen and anhaenge and os.path.isdir(lokal):
-                    namen = n.meta['anhaenge'] = _lokale_dokumente(lokal)
-                if not namen:
-                    continue
-                soll, ist = ziel(n.meta, themen), n.meta.get('drive')
-                if ist == soll:
-                    continue
-                try:
-                    if ist is None:
-                        if not (anhaenge and os.path.isdir(lokal)):
-                            continue
-                        for name in namen:
-                            bruecke.hochladen(soll, dateiname(n.meta, name),
-                                              os.path.join(lokal, os.path.basename(name)))
-                        hoch += 1
-                    else:
-                        sammel = ist.startswith(':%s/' % SAMMELORDNER)
-                        for i, name in enumerate(namen):
-                            bruecke.verschieben(ist, soll, dateiname(n.meta, name),
-                                                leeren=sammel and i == len(namen) - 1)
-                        verschoben += 1
-                except (DriveFehler, OSError) as e:
-                    fehler.append('%s: %s' % (n.meta['id'], e))
-                    continue
-                n.meta['drive'] = soll
-                with open(pfad, 'w', encoding='utf-8') as fh:
-                    fh.write(nz.schreiben(n))
+                if not n.meta.get('anhaenge') and nachtragen and anhaenge and os.path.isdir(lokal):
+                    n.meta['anhaenge'] = _lokale_dokumente(lokal)
+                soll = ziel(n.meta, themen)
+                ergebnisse = []
+                for schritt in (_anhaenge_abgleichen, _mail_abgleichen):
+                    try:
+                        ergebnisse.append(schritt(n, soll, lokal, bruecke))
+                    except (DriveFehler, OSError) as e:
+                        fehler.append('%s: %s' % (n.meta['id'], e))
+                if 'hoch' in ergebnisse:
+                    hoch += 1
+                elif 'verschoben' in ergebnisse:
+                    verschoben += 1
+                if any(ergebnisse):
+                    with open(pfad, 'w', encoding='utf-8') as fh:
+                        fh.write(nz.schreiben(n))
     if fehler:
         raise DriveFehler('%d Notizen nicht abgeglichen:\n%s' % (len(fehler), '\n'.join(fehler)))
     return hoch, verschoben

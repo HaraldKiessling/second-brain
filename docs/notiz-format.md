@@ -36,6 +36,9 @@ Verknüpft: [[IONOS]]
 | `konfidenz` | nein | Konfidenz der Einordnung, nur wenn kleiner als 1 |
 | `absender` | nein | Mail-Adresse des Absenders; daraus lernt die Heuristik |
 | `umsaetze` | nein | Verweise auf verknüpfte Umsätze, `<konto>/<datum>/<nr>` |
+| `anhaenge`, `drive` | nein | Dateinamen der Anhänge und ihr Ort in Drive (`<ordner-id>:<pfad>`) |
+| `mail_drive`, `mail_pdf` | nein | Mail soll als PDF in den Drive-Ordner (Web-App, Reiter Mails); `mail_pdf` ist ihr Ort, sobald sie dort liegt |
+| `nachholen` | nein | in der Web-App aus dem Index abgelegt; der nächste Abruf holt vollständigen Text und Anhänge (`second-brain nachholen`), sonst `nachholen_fehler` |
 
 Die `ablage` darf mehrstufig sein (`0-2026/31 Harald/ionos/rechnungen`). In Regeln und Vorschlägen werden `{jahr}` und `{monat}` im Unterordner durch das Datum der Mail ersetzt.
 

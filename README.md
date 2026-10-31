@@ -12,7 +12,7 @@ Dieses Repo enthält **nur Code** und keine persönlichen Daten, Einstellungen o
 | `docs/notiz-format.md` | Format einer Notiz und der Regeln |
 | `src/second_brain/` | Notiz-Format, Regel-Engine, Prüfung, Kommandozeile |
 | `.github/workflows/mail-abruf.yml` | wiederverwendbarer Ablauf: Mails abholen |
-| `web/` | Web-App: Eingang (Vorschläge bestätigen, Regel aus Mail, Spam), Zugangsdaten (als GitHub-Secrets), Regeln, Einstellungen, Abläufe; läuft auf GitHub Pages |
+| `web/` | Web-App: Eingang (Vorschläge bestätigen, Regel aus Mail, Spam), Mails (wo liegt welche Mail, Ablage ändern, Mail als PDF nach Drive), Zugangsdaten (als GitHub-Secrets), Regeln, Einstellungen, Abläufe; läuft auf GitHub Pages |
 | `beispiel-daten/` | Minimales Daten-Repo als Vorlage und für Tests |
 
 Vorhanden: Mail-Adapter (IMAP, z. B. GMX und Gmail) mit Einordnen in Stufen (Regel, Spam-Wert, Heuristik, optional KI über OpenRouter), Ablage der Anhänge in die Google-Drive-Ordner (über ein Apps-Script im Agentenkonto, `drive-bruecke/`) und Web-App. Geplant: Adapter für Banken, Drive und Web, Drive-Sicherung.
