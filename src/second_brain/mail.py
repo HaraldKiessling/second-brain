@@ -10,6 +10,11 @@ Anhaenge werden nie ins Daten-Repo geschrieben, sondern in ein separates
 Verzeichnis (--anhaenge), aus dem der Drive-Schritt sie hochlaedt.
 Der Abruf merkt sich je Konto die zuletzt gesehene IMAP-UID
 (eingang/.status/mail-<konto>.json) und ist dadurch wiederholbar.
+
+Nachholen: In der Web-App kann Harald eine Indexmail nachtraeglich als Notiz
+ablegen (`nachholen: true`) oder eine Notiz als PDF nach Drive geben lassen
+(`mail_drive: true`). Dafuer holt nachholen() die Mail per Message-ID noch
+einmal aus dem Postfach.
 """
 
 import datetime
@@ -22,6 +27,7 @@ import os
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from html import escape
 
 import yaml
 
@@ -35,6 +41,7 @@ BILD_ENDUNGEN = ('.png', '.jpg', '.jpeg', '.gif', '.webp')
 BILD_MINDESTGROESSE = 50_000  # kleinere Bilder sind Logos oder Signaturen
 KURZ_LAENGE = 300
 TEXT_LAENGE = 2000
+MAIL_SEITE = '.mail.html'  # Mail als HTML-Seite im Anhang-Ordner, fuer die PDF-Ablage
 KOEPFE = ('list-unsubscribe', 'list-id', 'precedence', 'auto-submitted') + eo.SPAM_KOEPFE
 
 
@@ -49,6 +56,7 @@ class Mail:
     kopf: dict = field(default_factory=dict)      # ausgewaehlte Kopfzeilen, Namen klein
     kategorie: str = ''                           # Gmail: werbung, sozial
     empfaenger: str = ''                          # An und Cc
+    html: str = ''                                # HTML-Fassung, falls vorhanden
 
     @property
     def dokumente(self):
@@ -92,6 +100,14 @@ def _text_von(msg):
     return re.sub(r'[ \t]+', ' ', re.sub(r'\n\s*\n+', '\n\n', inhalt)).strip()
 
 
+def _html_von(msg):
+    teil = msg.get_body(preferencelist=('html',))
+    try:
+        return teil.get_content() if teil is not None else ''
+    except (LookupError, ValueError):
+        return ''
+
+
 def mail_aus_bytes(roh):
     msg = email.message_from_bytes(roh, policy=email.policy.default)
     try:
@@ -111,7 +127,8 @@ def mail_aus_bytes(roh):
                 text=_text_von(msg),
                 anhaenge=anhaenge,
                 kopf={k: str(msg[k]) for k in KOEPFE if msg[k] is not None},
-                empfaenger=', '.join(str(msg[k]) for k in ('To', 'Cc') if msg[k] is not None))
+                empfaenger=', '.join(str(msg[k]) for k in ('To', 'Cc') if msg[k] is not None),
+                html=_html_von(msg))
 
 
 def _gmail_kategorien(imap, uids):
@@ -159,6 +176,31 @@ def imap_abruf(host, benutzer, passwort, status, postfach='INBOX', start_tage=30
             mails.append(m)
         letzte = max(uids) if uids else status.get('letzte_uid')
         return mails, {'uidvalidity': validity, 'letzte_uid': letzte}
+    finally:
+        try:
+            imap.logout()
+        except Exception:
+            pass
+
+
+def imap_holen(host, benutzer, passwort, message_ids, postfach='INBOX'):
+    """Mails nach Message-ID holen. Liefert {message_id: rohbytes}, nicht gefundene fehlen."""
+    imap = imaplib.IMAP4_SSL(host, 993)
+    gefunden = {}
+    try:
+        imap.login(benutzer, passwort)
+        typ, _ = imap.select(postfach, readonly=True)
+        if typ != 'OK':
+            raise RuntimeError('Postfach %s nicht lesbar' % postfach)
+        for mid in message_ids:
+            _, treffer = imap.uid('SEARCH', None, 'HEADER', 'Message-ID',
+                                  '"%s"' % mid.replace('"', ''))
+            uids = treffer[0].split()
+            if not uids:
+                continue
+            _, teile = imap.uid('FETCH', uids[-1].decode(), '(BODY.PEEK[])')
+            gefunden[mid] = next(t[1] for t in teile if isinstance(t, tuple))
+        return gefunden
     finally:
         try:
             imap.logout()
@@ -235,25 +277,6 @@ class Ablage:
             nid, n = '%s-%d' % (basis, n), n + 1
         return nid
 
-    def _anhaenge_sichern(self, nid, mail):
-        if not self.anhang_ziel or not mail.dokumente:
-            return
-        ziel = os.path.join(self.anhang_ziel, nid)
-        os.makedirs(ziel, exist_ok=True)
-        for name, inhalt in mail.dokumente:
-            with open(os.path.join(ziel, os.path.basename(name)), 'wb') as fh:
-                fh.write(inhalt)
-
-    def _notiz_text(self, mail):
-        text = mail.text[:TEXT_LAENGE].rstrip()
-        if len(mail.text) > TEXT_LAENGE:
-            text += ' …'
-        teile = ['# %s' % (mail.betreff.strip() or '(ohne Betreff)'), '',
-                 'Von: %s  ' % mail.absender, 'Datum: %s' % mail.datum.isoformat()]
-        if mail.anhaenge:
-            teile.append('Anhänge: %s' % ', '.join(n for n, _ in mail.anhaenge))
-        return '\n'.join(teile) + '\n\n' + text + '\n'
-
     def _protokoll(self, wer, aenderung):
         pfad = self._pfad('protokoll', '%s.md' % self.heute.strftime('%Y-%m'))
         if not os.path.exists(pfad):
@@ -308,10 +331,118 @@ class Ablage:
 
         os.makedirs(os.path.dirname(pfad), exist_ok=True)
         with open(pfad, 'w', encoding='utf-8') as fh:
-            fh.write(nz.schreiben(nz.Notiz(meta=meta, text=self._notiz_text(mail))))
-        self._anhaenge_sichern(nid, mail)
+            fh.write(nz.schreiben(nz.Notiz(meta=meta, text=notiz_text(mail))))
+        anhaenge_sichern(self.anhang_ziel, nid, mail)
         self.bekannt.add(mail.message_id)
         return pfad
+
+
+def notiz_text(mail):
+    text = mail.text[:TEXT_LAENGE].rstrip()
+    if len(mail.text) > TEXT_LAENGE:
+        text += ' …'
+    teile = ['# %s' % (mail.betreff.strip() or '(ohne Betreff)'), '',
+             'Von: %s  ' % mail.absender, 'Datum: %s' % mail.datum.isoformat()]
+    if mail.anhaenge:
+        teile.append('Anhänge: %s' % ', '.join(n for n, _ in mail.anhaenge))
+    return '\n'.join(teile) + '\n\n' + text + '\n'
+
+
+def anhaenge_sichern(anhang_ziel, nid, mail):
+    if not anhang_ziel or not mail.dokumente:
+        return
+    ziel = os.path.join(anhang_ziel, nid)
+    os.makedirs(ziel, exist_ok=True)
+    for name, inhalt in mail.dokumente:
+        with open(os.path.join(ziel, os.path.basename(name)), 'wb') as fh:
+            fh.write(inhalt)
+
+
+def mail_seite(absender, datum, betreff, text, html='', empfaenger=''):
+    """Die Mail als eigenstaendige HTML-Seite mit Kopf (Von, An, Datum, Betreff);
+    die Drive-Bruecke macht daraus ein PDF. Ohne HTML-Fassung wird der Text gesetzt."""
+    zeilen = ''.join('<tr><th style="text-align:left;padding-right:1em">%s</th><td>%s</td></tr>'
+                     % (k, escape(str(v))) for k, v in (('Von', absender), ('An', empfaenger),
+                                                        ('Datum', datum), ('Betreff', betreff)) if v)
+    kopf = ('<table style="font-family:sans-serif;font-size:10pt;margin-bottom:1em">%s</table>'
+            '<hr>' % zeilen)
+    meta = '<meta charset="utf-8">'
+    if not html:
+        return ('<!doctype html><html><head>%s</head><body>%s<pre style="white-space:pre-wrap;'
+                'font-family:sans-serif;font-size:10pt">%s</pre></body></html>'
+                % (meta, kopf, escape(text)))
+    html = re.sub(r'(?is)<script.*?</script>', '', html)
+    html = re.sub(r'(?is)<meta[^>]*charset[^>]*>', '', html)
+    html = re.sub(r'(?is)<img[^>]*src=["\']?cid:[^>]*>', '', html)  # eingebettete Bilder fehlen
+    if re.search(r'(?i)<body[^>]*>', html):
+        html = re.sub(r'(?i)<body[^>]*>', lambda m: m.group(0) + kopf, html, count=1)
+    else:
+        html = kopf + html
+    if re.search(r'(?i)<head[^>]*>', html):
+        return re.sub(r'(?i)<head[^>]*>', lambda m: m.group(0) + meta, html, count=1)
+    return meta + html
+
+
+def nachholen(wurzel, konto, holen, anhang_ziel=None):
+    """Notizen dieses Kontos vervollstaendigen, die die Web-App angefordert hat.
+
+    nachholen: true -> voller Mailtext statt Kurzinhalt, Anhaenge fuer Drive
+    mail_drive ohne mail_pdf -> Mail als HTML-Seite fuer die PDF-Ablage; ist sie
+      nicht mehr im Postfach, wird die Seite aus dem Notiztext gebaut.
+    holen: Liste von Message-IDs -> {message_id: rohbytes} (z. B. imap_holen).
+    Liefert (vervollstaendigt, nicht_gefunden).
+    """
+    auftraege = []
+    for verz, _, dateien in os.walk(os.path.join(wurzel, 'notizen')):
+        for d in sorted(dateien):
+            if not d.endswith('.md') or d == 'README.md':
+                continue
+            pfad = os.path.join(verz, d)
+            with open(pfad, encoding='utf-8') as fh:
+                try:
+                    n = nz.lesen(fh.read())
+                except nz.FormatFehler:
+                    continue
+            m = n.meta
+            if m.get('quelle') == konto and (
+                    m.get('nachholen') or (m.get('mail_drive') and not m.get('mail_pdf'))):
+                auftraege.append((pfad, n))
+    if not auftraege:
+        return 0, 0
+    ids = [n.meta['message_id'] for _, n in auftraege if n.meta.get('message_id')]
+    roh = holen(ids) if ids else {}
+    fertig = fehlt = 0
+    for pfad, n in auftraege:
+        r = roh.get(n.meta.get('message_id'))
+        m = mail_aus_bytes(r) if r else None
+        if m is None:
+            fehlt += 1
+        if n.meta.pop('nachholen', None):
+            if m is not None:
+                n.text = notiz_text(m)
+                if m.dokumente:
+                    n.meta['anhaenge'] = [os.path.basename(a) for a, _ in m.dokumente]
+                n.meta.pop('nachholen_fehler', None)
+            else:
+                n.meta['nachholen_fehler'] = 'Mail nicht mehr im Postfach, nur Kurzinhalt'
+        if m is not None:
+            anhaenge_sichern(anhang_ziel, n.meta['id'], m)
+            fertig += 1
+        if n.meta.get('mail_drive') and not n.meta.get('mail_pdf') and anhang_ziel:
+            if m is not None:
+                seite = mail_seite(m.absender, m.datum.isoformat(), m.betreff, m.text, m.html,
+                                   m.empfaenger)
+            else:
+                text = re.sub(r'^# .*\n+', '', n.text)
+                seite = mail_seite(n.meta.get('absender', ''), str(n.meta.get('erstellt')),
+                                   n.titel, text)
+            ziel = os.path.join(anhang_ziel, n.meta['id'])
+            os.makedirs(ziel, exist_ok=True)
+            with open(os.path.join(ziel, MAIL_SEITE), 'w', encoding='utf-8') as fh:
+                fh.write(seite)
+        with open(pfad, 'w', encoding='utf-8') as fh:
+            fh.write(nz.schreiben(n))
+    return fertig, fehlt
 
 
 def unterordner_einsetzen(unterordner, datum):
