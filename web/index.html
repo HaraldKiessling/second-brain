@@ -20,12 +20,16 @@
     <section id="anmeldung" hidden>
       <h2>Anmelden</h2>
       <p>Die Seite spricht direkt mit GitHub. Dein Token bleibt nur in diesem Browser gespeichert.</p>
-      <label>Daten-Repo <input id="repo" value="HaraldKiessling/second-brain-data"></label>
-      <label>GitHub-Token <input id="token" type="password" autocomplete="off"></label>
-      <p class="hinweis">Fine-grained Token nur für das Daten-Repo, mit den Rechten
-        <em>Contents</em>, <em>Secrets</em> und <em>Actions</em> jeweils „Read and write“.
-        <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Token anlegen</a></p>
-      <button id="anmelden">Anmelden</button>
+      <!-- Echtes Formular mit Nutzername und Passwort, damit der Passwortmanager ausfuellt und speichert. -->
+      <form id="anmeldung-form">
+        <label>Daten-Repo <input id="repo" name="username" autocomplete="username" value="HaraldKiessling/second-brain-data"></label>
+        <label>GitHub-Token <input id="token" name="password" type="password" autocomplete="current-password"></label>
+        <p class="hinweis">Fine-grained Token nur für das Daten-Repo, mit den Rechten
+          <em>Contents</em>, <em>Secrets</em> und <em>Actions</em> jeweils „Read and write“.
+          <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Token anlegen</a>
+          Chrome bietet nach der Anmeldung an, das Token zu speichern.</p>
+        <button id="anmelden" type="submit">Anmelden</button>
+      </form>
       <p id="anmeldung-fehler" class="fehler"></p>
     </section>
 
@@ -82,6 +86,7 @@
     <section id="zugang" class="reiter" hidden>
       <h2>Zugangsdaten</h2>
       <p>Werte werden verschlüsselt als GitHub-Secret gespeichert. Danach kann sie nur noch der Ablauf lesen, auch diese Seite nicht.</p>
+      <div id="konten"></div>
       <table><thead><tr><th>Name</th><th>Wofür</th><th>Stand</th><th></th></tr></thead><tbody id="secrets"></tbody></table>
       <div id="drive-bereich" class="karte">
         <h3>Google Drive verbinden</h3>
@@ -97,9 +102,12 @@
         </ol>
         <div id="drive-ergebnis" class="hinweis"></div>
       </div>
-      <details><summary>Weiteres Secret</summary>
-        <label>Name <input id="secret-neu-name" placeholder="NAME_IN_GROSSBUCHSTABEN"></label>
-        <button id="secret-neu">Wert setzen</button>
+      <details id="secret-neu-bereich"><summary>Weiteres Secret</summary>
+        <form id="secret-neu-form">
+          <label>Name <input id="secret-neu-name" name="username" autocomplete="username" placeholder="NAME_IN_GROSSBUCHSTABEN"></label>
+          <label>Wert <input id="secret-neu-wert" name="password" type="password" autocomplete="new-password"></label>
+          <button type="submit">Wert setzen</button>
+        </form>
       </details>
     </section>
 
