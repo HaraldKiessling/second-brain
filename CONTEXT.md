@@ -60,6 +60,10 @@ _Avoid_: Machine Learning, Klassifikator
 Bekannte Gegenparteien aus der Drive-Ablage und früheren Steuererklärungen (z. B. „HUK, Hausrat → Versicherungen/01HUK_Hausrat“). Liefert **Vorschläge**, legt aber allein nichts ab.
 _Avoid_: Stammdaten, Mapping
 
+**Ordnerliste**:
+Alle bekannten Unterordner der Drive-Ablage je Thema, auch mehrstufig (z. B. „Finanzen/Karten“). Sie steht in `config/ordner.yaml` im Daten-Repo und wächst mit jedem Ablegen in einen neuen Ordner. Die Web-App zeigt sie als Ordnerauswahl, die für eine Mail wahrscheinlichsten Ordner stehen oben.
+_Avoid_: Ordnerbaum (die Brücke kann Drive nicht auflisten, die Liste ist das, was das System kennt)
+
 **Spam-Wert**:
 Wie sehr eine Mail nach Werbung oder Spam aussieht, von 0 bis 1, aus Merkmalen im Mail-Kopf (Abmeldelink, Massenversand, Spam-Markierung des Anbieters, Gmail-Kategorie) und Betreff. Ab der Spam-Schwelle wird verworfen; die Mail bleibt als **Indexeintrag** mit Grund auffindbar.
 _Avoid_: Spam-Score, Junk
