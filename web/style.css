@@ -110,3 +110,9 @@ label.haken input { width: auto; display: inline; margin: 0; }
 }
 .hinweis.neu { color: var(--warn); }
 select.ordnerwahl optgroup { font-style: normal; }
+.ordnerliste { max-height: 230px; overflow-y: auto; border: 1px solid var(--linie); border-radius: 8px; margin: -4px 0 8px; background: var(--flaeche); }
+.ordnerliste .kopf { padding: 4px 10px; font-weight: 600; font-size: 0.85em; color: var(--leise); background: var(--grund); }
+.ordnerliste .eintrag { padding: 6px 10px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ordnerliste .eintrag:hover { background: var(--grund); }
+.ordnerliste .eintrag.gewaehlt { background: var(--akzent); color: #fff; }
+.ordnerliste .eintrag.neu { color: var(--warn); font-weight: 600; }
