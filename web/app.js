@@ -454,10 +454,9 @@ function bekannteOrdner() {
     if (!alle.has(k)) alle.set(k, { thema, unterordner: (uo || '').replace(/^\/+|\/+$/g, ''), quelle });
   };
   for (const t of Object.keys(zustand.themen)) dazu(t, '', 'Themenordner');
+  // Nur die Ordnerliste (echter Drive-Baum) zaehlt als bestehend. Ziele aus
+  // Ablagewissen, Vertraegen und Regeln erscheinen nur, wenn sie passen, und dann als neu.
   for (const [t, liste] of Object.entries(zustand.ordner || {})) for (const uo of liste || []) dazu(t, String(uo), 'Ordnerliste');
-  for (const w of zustand.wissen || []) if (w.unterordner) dazu(w.thema, String(w.unterordner), 'Ablagewissen');
-  for (const v of zustand.vertraege || []) dazu(v.thema, String(v.unterordner || ''), 'Vertrag');
-  for (const r of (zustand.regeln && zustand.regeln.regeln) || []) if (r.unterordner) dazu(r.thema, r.unterordner, 'Regel');
   return alle;
 }
 
@@ -633,9 +632,9 @@ function auswahlFelder(vorgabe, kontext = {}) {
     const gewaehltName = gewaehlt ? norm(ordnerName({ thema: gewaehlt.split('\t')[0], unterordner: gewaehlt.split('\t')[1] })) : '';
     if (!q.length || norm(suche.value) === gewaehltName) {
       if (oben.length) liste.append(kopf('Wahrscheinlich'));
-      for (const o of oben) liste.append(eintrag(o, `${ordnerName(o)}  ·  ${o.gruende.slice(0, 2).join(', ')}`));
-      liste.append(kopf('Alle Ordner'));
-      for (const o of sortiert) {
+      for (const o of oben) liste.append(eintrag(o, `${ordnerName(o)}${ordnerBekannt(o.thema, o.unterordner) ? '' : ' (neu)'}  ·  ${o.gruende.slice(0, 2).join(', ')}`));
+      liste.append(kopf('Alle Ordner in Drive'));
+      for (const o of sortiert.filter((x) => ordnerBekannt(x.thema, x.unterordner))) {
         const tiefe = o.unterordner ? o.unterordner.split('/').length : 0;
         liste.append(eintrag(o, '\u00a0\u00a0\u00a0'.repeat(tiefe) + (tiefe ? o.unterordner.split('/').pop() : ordnerName(o))));
       }
@@ -645,7 +644,7 @@ function auswahlFelder(vorgabe, kontext = {}) {
     const treffer = rang.filter((o) => { const n = norm(ordnerName(o)); return q.every((w) => n.includes(w)); });
     const ziel = zerlegen(suche.value);
     const neuerPfad = ziel && ziel.unterordner && unterordnerGueltig(ziel.unterordner) && !ordnerBekannt(ziel.thema, ziel.unterordner);
-    for (const o of treffer.slice(0, 30)) liste.append(eintrag(o, ordnerName(o) + (o.punkte > 0 ? `  ·  ${o.gruende.slice(0, 2).join(', ')}` : '')));
+    for (const o of treffer.slice(0, 30)) liste.append(eintrag(o, ordnerName(o) + (ordnerBekannt(o.thema, o.unterordner) ? '' : ' (neu)') + (o.punkte > 0 ? `  ·  ${o.gruende.slice(0, 2).join(', ')}` : '')));
     if (neuerPfad) liste.append(eintrag(ziel, `➕ Neuer Ordner: ${ordnerName(ziel)}`, 'neu'));
     if (!treffer.length && !neuerPfad) liste.append(kopf('Kein Ordner gefunden. Tippe „Thema / Unterordner“ für einen neuen.'));
     erster = treffer[0] || (neuerPfad ? ziel : null);
