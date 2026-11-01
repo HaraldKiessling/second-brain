@@ -108,3 +108,5 @@ label.haken input { width: auto; display: inline; margin: 0; }
   td[data-label]::before { content: attr(data-label) ": "; color: var(--leise); }
   td:empty { display: none; }
 }
+.hinweis.neu { color: var(--warn); }
+select.ordnerwahl optgroup { font-style: normal; }
