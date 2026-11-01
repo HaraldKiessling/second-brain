@@ -12,9 +12,10 @@ const SECRETS = [
 const REGEL_DATEI = 'regeln/mail.json';
 const VORSCHLAG_DATEI = 'regeln/mail-vorschlaege.json';
 const MAIL_WORKFLOW = 'mail.yml';
+const ORDNER_DATEI = 'config/ordner.yaml';
 
 const $ = (sel) => document.querySelector(sel);
-const zustand = { repo: '', token: '', themen: {}, personen: {}, regeln: null, regelSha: '', bearbeitet: -1, regelVonMail: null, regelVonVorschlag: null };
+const zustand = { repo: '', token: '', themen: {}, personen: {}, regeln: null, regelSha: '', bearbeitet: -1, regelVonMail: null, regelVonVorschlag: null, ordner: {}, wissen: [] };
 
 // --- Speicher (localStorage kann fehlen, z. B. im privaten Modus) ----------
 
@@ -439,8 +440,116 @@ async function zeigeEingang() {
   zeigeVerworfen();
 }
 
-function auswahlFelder(vorgabe) {
+// --- Ordnerauswahl ----------------------------------------------------------
+// Alle bekannten Ordner: Themenordner, config/ordner.yaml, Ablagewissen und
+// Regeln. Fuer eine Mail kommen die wahrscheinlichsten nach oben.
+
+const ordnerSchluessel = (thema, uo) => `${thema}\t${uo || ''}`;
+
+function bekannteOrdner() {
+  const alle = new Map();
+  const dazu = (thema, uo, quelle) => {
+    if (!(thema in zustand.themen)) return;
+    const k = ordnerSchluessel(thema, (uo || '').replace(/^\/+|\/+$/g, ''));
+    if (!alle.has(k)) alle.set(k, { thema, unterordner: (uo || '').replace(/^\/+|\/+$/g, ''), quelle });
+  };
+  for (const t of Object.keys(zustand.themen)) dazu(t, '', 'Themenordner');
+  for (const [t, liste] of Object.entries(zustand.ordner || {})) for (const uo of liste || []) dazu(t, String(uo), 'Ordnerliste');
+  for (const w of zustand.wissen || []) if (w.unterordner) dazu(w.thema, String(w.unterordner), 'Ablagewissen');
+  for (const r of (zustand.regeln && zustand.regeln.regeln) || []) if (r.unterordner) dazu(r.thema, r.unterordner, 'Regel');
+  return alle;
+}
+
+// Woerter fuer den Vergleich: klein, ohne Umlaute, ohne Ziffern.
+function woerter(text) {
+  return String(text || '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+    .split(/[^a-z]+/).filter((w) => w.length >= 3);
+}
+const wortPasst = (a, b) => a === b || (a.length >= 5 && b.length >= 5 && (a.startsWith(b) || b.startsWith(a)));
+const OHNE_GEWICHT = new Set(['und', 'der', 'die', 'das', 'mit', 'fuer', 'von', 'ihre', 'ihr', 'sie', 'wir', 'zum', 'zur', 'den', 'dem', 'des',
+  'privat', 'harald', 'ausgaben', 'sonstiges', 'weitere', 'kosten', 'neu', 'http', 'https', 'www']);
+
+// kontext: { absender, betreff, text, anhaenge, vorschlag }
+// Ergebnis: [{ thema, unterordner, punkte, gruende }], wahrscheinlichste zuerst.
+function ordnerRangliste(kontext) {
+  const alle = bekannteOrdner();
+  const punkte = new Map();
+  const gib = (thema, uo, n, grund) => {
+    const k = ordnerSchluessel(thema, uo);
+    if (!alle.has(k)) alle.set(k, { thema, unterordner: uo || '', quelle: 'Vorschlag' });
+    const p = punkte.get(k) || { punkte: 0, gruende: [] };
+    p.punkte += n;
+    if (grund && !p.gruende.includes(grund)) p.gruende.push(grund);
+    punkte.set(k, p);
+  };
+  if (kontext.aktuell && kontext.aktuell.thema in zustand.themen) {
+    gib(kontext.aktuell.thema, (kontext.aktuell.unterordner || '').replace(/^\/+|\/+$/g, ''), 1, 'liegt jetzt hier');
+  }
+  const v = kontext.vorschlag;
+  for (const a of v && v.thema ? [v, ...(v.alternativen || [])] : []) {
+    if (a.thema in zustand.themen) gib(a.thema, (a.unterordner || '').replace(/^\/+|\/+$/g, ''), 2 + 3 * (a.konfidenz || 0), `Vorschlag ${Math.round((a.konfidenz || 0) * 100)} %`);
+  }
+  const roh = [kontext.absender, kontext.betreff, ...(kontext.anhaenge || [])].join(' ').toLowerCase();
+  for (const w of zustand.wissen || []) {
+    const gefunden = (w.muster || []).map(String).filter((m) => roh.includes(m.toLowerCase()));
+    if (gefunden.length) gib(w.thema, String(w.unterordner || ''), 1.5 * gefunden.length, gefunden.join(', '));
+  }
+  // Woerter aus Betreff (doppelt), Anhaengen und Mailtext gegen Ordnernamen
+  const kopf = new Set(woerter([kontext.betreff, ...(kontext.anhaenge || [])].join(' ')));
+  // Mailtext bis zur Grussformel, der Fuss (Telefon, Impressum) verfaelscht sonst
+  const text = String(kontext.text || '').split(/\n\s*(mit freundlichen gr|viele gr|beste gr|freundliche gr|kind regards|best regards)/i)[0];
+  const rumpf = new Set(woerter(text.slice(0, 3000)));
+  for (const o of alle.values()) {
+    const t = zustand.themen[o.thema] || {};
+    const namen = new Set([...woerter(t.name), ...woerter(t.ablage), ...woerter(o.unterordner), ...(t.stichwoerter || []).flatMap(woerter)]);
+    for (const n of namen) {
+      if (OHNE_GEWICHT.has(n)) continue;
+      // Ein Treffer im Unterordner zaehlt fuer diesen Ordner, nicht fuer das ganze Thema
+      const tief = woerter(o.unterordner).includes(n) ? 1 : 0.6;
+      if ([...kopf].some((w) => wortPasst(w, n))) gib(o.thema, o.unterordner, 1.2 * tief, `„${n}“ im Betreff`);
+      else if ([...rumpf].some((w) => wortPasst(w, n))) gib(o.thema, o.unterordner, 0.5 * tief, `„${n}“ in der Mail`);
+    }
+  }
+  return [...alle.entries()].map(([k, o]) => ({ ...o, ...(punkte.get(k) || { punkte: 0, gruende: [] }) }))
+    .sort((a, b) => b.punkte - a.punkte);
+}
+
+function ordnerName(o) {
+  const t = zustand.themen[o.thema] || {};
+  return [t.name || o.thema, ...String(o.unterordner || '').split('/').filter(Boolean)].join(' / ');
+}
+
+function ordnerBekannt(thema, uo) {
+  return bekannteOrdner().has(ordnerSchluessel(thema, String(uo || '').replace(/^\/+|\/+$/g, '')));
+}
+
+function auswahlFelder(vorgabe, kontext = {}) {
   const box = document.createElement('div');
+  const ordner = document.createElement('select');
+  ordner.className = 'ordnerwahl';
+  ordner.add(new Option('– Ordner wählen –', ''));
+  const rang = ordnerRangliste({ ...kontext, aktuell: !kontext.vorschlag && vorgabe.thema ? vorgabe : null });
+  const oben = rang.filter((o) => o.punkte > 0).slice(0, 8);
+  const wert = (o) => ordnerSchluessel(o.thema, o.unterordner);
+  if (oben.length) {
+    const g = document.createElement('optgroup');
+    g.label = 'Wahrscheinlich';
+    for (const o of oben) g.append(new Option(`${ordnerName(o)}  ·  ${o.gruende.slice(0, 2).join(', ')}`, wert(o)));
+    ordner.append(g);
+  }
+  const reihenfolge = Object.keys(zustand.themen);
+  const rest = rang.filter((o) => !oben.includes(o)).sort((a, b) =>
+    reihenfolge.indexOf(a.thema) - reihenfolge.indexOf(b.thema) || a.unterordner.localeCompare(b.unterordner, 'de'));
+  const g2 = document.createElement('optgroup');
+  g2.label = 'Alle Ordner';
+  for (const o of rest) {
+    const tiefe = o.unterordner ? o.unterordner.split('/').length : 0;
+    const name = tiefe ? o.unterordner.split('/').pop() : ordnerName(o);
+    g2.append(new Option('   '.repeat(tiefe) + name, wert(o)));
+  }
+  ordner.append(g2);
+  const lo = document.createElement('label'); lo.append('Ordner (wahrscheinlichste oben)', ordner);
+
   const reihe = document.createElement('div');
   reihe.className = 'reihe';
   const thema = document.createElement('select');
@@ -448,10 +557,27 @@ function auswahlFelder(vorgabe) {
   for (const [k, t] of Object.entries(zustand.themen)) thema.add(new Option(t.name || k, k, false, k === vorgabe.thema));
   const uo = document.createElement('input');
   uo.value = vorgabe.unterordner || '';
-  uo.placeholder = 'z. B. firma/rechnungen/{jahr}';
+  uo.placeholder = 'leer = Themenordner, Ebenen mit /';
   const l1 = document.createElement('label'); l1.append('Thema', thema);
-  const l2 = document.createElement('label'); l2.append('Unterordner', uo);
+  const l2 = document.createElement('label'); l2.append('Unterordner (auch neu)', uo);
   reihe.append(l1, l2);
+  const neu = document.createElement('div');
+  neu.className = 'hinweis neu';
+  const abgleichen = () => {
+    const k = ordnerSchluessel(thema.value, uo.value.trim().replace(/^\/+|\/+$/g, ''));
+    ordner.value = [...ordner.options].some((o) => o.value === k) ? k : '';
+    neu.textContent = thema.value && uo.value.trim() && !ordnerBekannt(thema.value, uo.value.trim())
+      ? 'Neuer Ordner: wird beim Ablegen in Drive angelegt.' : '';
+  };
+  ordner.addEventListener('change', () => {
+    if (!ordner.value) return;
+    const [t, u] = ordner.value.split('\t');
+    thema.value = t; uo.value = u;
+    abgleichen();
+  });
+  thema.addEventListener('change', abgleichen);
+  uo.addEventListener('input', abgleichen);
+
   const personen = document.createElement('fieldset');
   personen.innerHTML = '<legend>Personen</legend>';
   const aktiv = vorgabe.personen && vorgabe.personen.length ? vorgabe.personen : (zustand.regeln.standard_personen || []);
@@ -462,7 +588,8 @@ function auswahlFelder(vorgabe) {
     l.append(c, ' ' + (p.name || k));
     personen.append(l);
   }
-  box.append(reihe, personen);
+  box.append(lo, reihe, neu, personen);
+  abgleichen();
   box.wert = () => ({
     thema: thema.value,
     unterordner: uo.value.trim(),
@@ -474,8 +601,15 @@ function auswahlFelder(vorgabe) {
     if (v.personen && v.personen.length) {
       personen.querySelectorAll('input').forEach((c) => { c.checked = v.personen.includes(c.value); });
     }
+    abgleichen();
   };
   return box;
+}
+
+// Kontext fuer die Rangliste aus einer Notiz oder einem Eingang
+function mailKontext(e, vorschlag) {
+  return { absender: absenderAdresse(e), betreff: titelVon(e.text), text: e.text,
+    anhaenge: e.meta.anhaenge || [], vorschlag };
 }
 
 function eingangKarte(e) {
@@ -503,7 +637,7 @@ function eingangKarte(e) {
   }
   karte.append(vb);
 
-  const felder = auswahlFelder(v || {});
+  const felder = auswahlFelder(v || {}, mailKontext(e, v));
   const pdf = pdfHaken(!!(v && v.mail_drive));
   felder.append(pdf);
   const wertMitPdf = felder.wert;
@@ -592,10 +726,26 @@ async function eingangAblegen(e, w, durch, wie = 'aus Eingang abgelegt', weitere
     { pfad: ziel, text: notizSchreiben(meta, e.text) },
     ...(e.pfad && ziel !== e.pfad ? [{ pfad: e.pfad, loeschen: true }] : []),
     { pfad: protokoll, text: protokollZeile(await dateiOderLeer(protokoll), heute, durch, `Notiz \`${meta.id}\` ${wie}`) },
+    ...await ordnerMerken(w.thema, w.unterordner),
     ...await weitere(),
   ], `${!e.pfad ? 'index' : e.pfad.startsWith('eingang/') ? 'eingang' : 'korrektur'}: ${meta.id} -> ${w.thema} (Web)`);
   melde(`Abgelegt unter ${meta.ablage}.`, 'gut');
   return ziel;
+}
+
+// Ein neuer Unterordner kommt beim Ablegen in config/ordner.yaml, damit er
+// beim naechsten Mal in der Auswahl steht.
+async function ordnerMerken(thema, uo) {
+  uo = String(uo || '').trim().replace(/^\/+|\/+$/g, '');
+  if (!uo) return [];
+  const daten = jsyaml.load(await dateiOderLeer(ORDNER_DATEI)) || {};
+  const ordner = daten.ordner || {};
+  if ((ordner[thema] || []).map(String).includes(uo)) return [];
+  ordner[thema] = [...new Set([...(ordner[thema] || []).map(String), uo])].sort((a, b) => a.localeCompare(b, 'de'));
+  zustand.ordner = ordner;
+  const kopf = '# Bekannte Unterordner der Drive-Ablage je Thema (Pfad unterhalb des Themenordners,\n'
+    + '# Ebenen mit /). Die Web-App bietet sie in der Ordnerauswahl an und ergaenzt neue beim Ablegen.\n';
+  return [{ pfad: ORDNER_DATEI, text: kopf + jsyaml.dump({ ordner }, { lineWidth: -1 }) }];
 }
 
 // Uebersicht: Ablaeufe und automatisch abgelegte Notizen mit Korrektur
@@ -668,7 +818,7 @@ function autoKarte(a) {
       return;
     }
     const thema = (e.meta.themen || [])[0];
-    const felder = auswahlFelder({ thema, unterordner: unterordnerAusAblage(e.meta.ablage, thema), personen: e.meta.personen });
+    const felder = auswahlFelder({ thema, unterordner: unterordnerAusAblage(e.meta.ablage, thema), personen: e.meta.personen }, mailKontext(e));
     const ablage = document.createElement('div');
     ablage.className = 'hinweis';
     ablage.textContent = 'Jetzt: ' + (e.meta.ablage || '');
@@ -873,7 +1023,8 @@ function mailFormular(m, karte, knoepfe, fehler) {
   form.className = 'mail-form';
   const z = m.zeile;
   const vorgabe = z ? {} : { thema: (m.meta.themen || [])[0], unterordner: unterordnerAusAblage(m.meta.ablage, (m.meta.themen || [])[0]), personen: m.meta.personen };
-  const felder = auswahlFelder(vorgabe);
+  const felder = auswahlFelder(vorgabe, z ? { absender: z.absender, betreff: z.betreff, text: z.kurz }
+    : mailKontext(m, m.meta.vorschlag));
   const liegt = !!(m.meta && m.meta.mail_pdf);
   const haken = pdfHaken(!!(m.meta && m.meta.mail_drive),
     liegt ? 'Mail als PDF in Drive (Haken weg: PDF kommt in den Ordner „Second Brain Papierkorb“)' : undefined);
@@ -979,9 +1130,12 @@ async function zeigeVerworfen() {
 // Regeln
 
 async function stammdatenLaden() {
-  const [themen, personen] = await Promise.all([dateiLesen('config/themen.yaml'), dateiLesen('config/personen.yaml')]);
+  const [themen, personen, ordner, wissen] = await Promise.all([dateiLesen('config/themen.yaml'), dateiLesen('config/personen.yaml'),
+    dateiOderLeer(ORDNER_DATEI), dateiOderLeer('config/ablagewissen.yaml')]);
   zustand.themen = jsyaml.load(themen.text).themen || {};
   zustand.personen = jsyaml.load(personen.text).personen || {};
+  zustand.ordner = (jsyaml.load(ordner) || {}).ordner || {};
+  zustand.wissen = (jsyaml.load(wissen) || {}).eintraege || [];
 }
 
 async function zeigeRegeln() {
