@@ -196,3 +196,12 @@ def test_ki_vorschlag_mit_falscher_nummer_rutscht_nach_hinten(repo):
                       encoding='utf-8').read()).meta['vorschlag']
     assert v['unterordner'] == 'HUK/Kfz'
     assert v['alternativen'][0]['konfidenz'] == 0.15
+
+
+def test_bestehende_ordner_nur_aus_ordnerliste(repo):
+    # Ziele aus Ablagewissen gelten nicht als bestehend, nur die Ordnerliste (Drive-Baum)
+    with open(os.path.join(repo, 'config', 'ordner.yaml'), 'w', encoding='utf-8') as fh:
+        fh.write('ordner:\n  versicherungen:\n  - 05Echt\n  - 05Echt/Unter\n')
+    bekannt = daten.bekannte_unterordner(repo)
+    assert {'05Echt', '05Echt/Unter'} <= bekannt['versicherungen']
+    assert '01Hausrat' not in bekannt.get('versicherungen', set())

@@ -72,21 +72,17 @@ def lerner(wurzel, quelle='mail'):
 
 
 def bekannte_unterordner(wurzel):
-    """Thema -> Unterordner, die es schon gibt (Notizen und Ablagewissen)."""
+    """Thema -> Unterordner, die es schon gibt: die Ordnerliste (echter Drive-Baum)
+    und Ordner, in die schon Notizen abgelegt wurden. Ziele aus Ablagewissen und
+    Vertragsliste zaehlen nicht, sie koennen veraltet sein."""
     from . import einordnen
     th = themen(wurzel)
     bekannt = {}
     for b in einordnen.beispiele_aus_notizen(notiz_pfade(wurzel), th):
         if b.unterordner:
             bekannt.setdefault(b.thema, set()).add(b.unterordner)
-    for w in ablagewissen(wurzel):
-        if w.get('unterordner'):
-            bekannt.setdefault(w['thema'], set()).add(w['unterordner'])
     for t, liste in ordnerliste(wurzel).items():
-        bekannt.setdefault(t, set()).update(liste)
-    for v in vertraege(wurzel):
-        if v.get('unterordner'):
-            bekannt.setdefault(v.get('thema'), set()).add(str(v['unterordner']))
+        bekannt.setdefault(t, set()).update(str(x) for x in liste or [])
     return bekannt
 
 
