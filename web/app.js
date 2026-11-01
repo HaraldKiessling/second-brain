@@ -15,7 +15,7 @@ const MAIL_WORKFLOW = 'mail.yml';
 const ORDNER_DATEI = 'config/ordner.yaml';
 
 const $ = (sel) => document.querySelector(sel);
-const zustand = { repo: '', token: '', themen: {}, personen: {}, regeln: null, regelSha: '', bearbeitet: -1, regelVonMail: null, regelVonVorschlag: null, ordner: {}, wissen: [] };
+const zustand = { repo: '', token: '', themen: {}, personen: {}, regeln: null, regelSha: '', bearbeitet: -1, regelVonMail: null, regelVonVorschlag: null, ordner: {}, wissen: [], objekte: {}, steuer: {}, vertraege: [] };
 
 // --- Speicher (localStorage kann fehlen, z. B. im privaten Modus) ----------
 
@@ -456,9 +456,16 @@ function bekannteOrdner() {
   for (const t of Object.keys(zustand.themen)) dazu(t, '', 'Themenordner');
   for (const [t, liste] of Object.entries(zustand.ordner || {})) for (const uo of liste || []) dazu(t, String(uo), 'Ordnerliste');
   for (const w of zustand.wissen || []) if (w.unterordner) dazu(w.thema, String(w.unterordner), 'Ablagewissen');
+  for (const v of zustand.vertraege || []) dazu(v.thema, String(v.unterordner || ''), 'Vertrag');
   for (const r of (zustand.regeln && zustand.regeln.regeln) || []) if (r.unterordner) dazu(r.thema, r.unterordner, 'Regel');
   return alle;
 }
+
+// Ziffernfolgen ab 6 Stellen ohne Trennzeichen (624/220429-P -> 624220429), wie nummern() in einordnen.py
+function nummern(text) {
+  return new Set((String(text || '').match(/\d(?:[\s/._-]*\d)+/g) || []).map((z) => z.replace(/\D/g, '')).filter((z) => z.length >= 6));
+}
+const schnitt = (a, b) => [...a].some((x) => b.has(x));
 
 // Woerter fuer den Vergleich: klein, ohne Umlaute, ohne Ziffern.
 function woerter(text) {
@@ -494,6 +501,18 @@ function ordnerRangliste(kontext) {
     const gefunden = (w.muster || []).map(String).filter((m) => roh.includes(m.toLowerCase()));
     if (gefunden.length) gib(w.thema, String(w.unterordner || ''), 1.5 * gefunden.length, gefunden.join(', '));
   }
+  // Vertragsnummern: Vertragsliste und Nummern in Ordnernamen
+  const imBetreff = nummern([kontext.betreff, ...(kontext.anhaenge || [])].join(' '));
+  const ueberall = new Set([...imBetreff, ...nummern(kontext.text)]);
+  for (const v of zustand.vertraege || []) {
+    if (schnitt(nummern(v.nummer), ueberall)) gib(v.thema, String(v.unterordner || ''), 8, `Vertrag ${v.nummer}`);
+  }
+  for (const o of [...alle.values()]) {
+    const eigene = nummern(o.unterordner);
+    if (!eigene.size) continue;
+    if (schnitt(eigene, ueberall)) gib(o.thema, o.unterordner, 6, 'Vertragsnummer passt');
+    else if (imBetreff.size) gib(o.thema, o.unterordner, -6, 'andere Vertragsnummer');
+  }
   // Woerter aus Betreff (doppelt), Anhaengen und Mailtext gegen Ordnernamen
   const kopf = new Set(woerter([kontext.betreff, ...(kontext.anhaenge || [])].join(' ')));
   // Mailtext bis zur Grussformel, der Fuss (Telefon, Impressum) verfaelscht sonst
@@ -523,32 +542,116 @@ function ordnerBekannt(thema, uo) {
   return bekannteOrdner().has(ordnerSchluessel(thema, String(uo || '').replace(/^\/+|\/+$/g, '')));
 }
 
+// Haekchen-Gruppe: eintraege { schluessel: { name } }
+function haekchen(legende, eintraege, aktiv = []) {
+  const f = document.createElement('fieldset');
+  const l = document.createElement('legend');
+  l.textContent = legende;
+  f.append(l);
+  for (const [k, e] of Object.entries(eintraege)) {
+    const lab = document.createElement('label');
+    const c = document.createElement('input');
+    c.type = 'checkbox'; c.value = k; c.checked = aktiv.includes(k);
+    lab.append(c, ' ' + ((e && e.name) || k));
+    f.append(lab);
+  }
+  f.werte = () => [...f.querySelectorAll('input:checked')].map((c) => c.value);
+  f.setzen = (liste = []) => f.querySelectorAll('input').forEach((c) => { c.checked = liste.includes(c.value); });
+  return f;
+}
+
+// Weitere Themen, Objekte, Steuerbezuege (aufklappbar). Liefert Element mit werte()/setzen().
+function bezuegeFelder(vorgabe = {}) {
+  const d = document.createElement('details');
+  d.className = 'bezuege';
+  const s = document.createElement('summary');
+  const themen = haekchen('Weitere Themen (auch dort auffindbar)', zustand.themen, vorgabe.weitere_themen || []);
+  const objekte = haekchen('Objekt', zustand.objekte, vorgabe.objekte || []);
+  const steuer = haekchen('Steuerbezug', zustand.steuer, vorgabe.steuer || []);
+  const teile = [themen, ...(Object.keys(zustand.objekte).length ? [objekte] : []), ...(Object.keys(zustand.steuer).length ? [steuer] : [])];
+  const zusammenfassen = () => {
+    const namen = (liste, quelle) => liste.map((k) => ((quelle[k] || {}).name || k).split(' (')[0]);
+    const alle = [...namen(themen.werte(), zustand.themen), ...namen(objekte.werte(), zustand.objekte), ...namen(steuer.werte(), zustand.steuer)];
+    s.textContent = 'Weitere Themen, Objekt, Steuerbezug' + (alle.length ? ': ' + alle.join(', ') : '');
+  };
+  d.append(s, ...teile);
+  d.addEventListener('change', zusammenfassen);
+  d.werte = () => ({ weitere_themen: themen.werte(), objekte: objekte.werte(), steuer: steuer.werte() });
+  d.setzen = (v = {}) => {
+    themen.setzen(v.weitere_themen || []); objekte.setzen(v.objekte || []); steuer.setzen(v.steuer || []);
+    zusammenfassen();
+    if ((v.weitere_themen || []).length || (v.objekte || []).length || (v.steuer || []).length) d.open = true;
+  };
+  d.setzen(vorgabe);
+  return d;
+}
+
 function auswahlFelder(vorgabe, kontext = {}) {
   const box = document.createElement('div');
-  const ordner = document.createElement('select');
-  ordner.className = 'ordnerwahl';
-  ordner.add(new Option('– Ordner wählen –', ''));
   const rang = ordnerRangliste({ ...kontext, aktuell: !kontext.vorschlag && vorgabe.thema ? vorgabe : null });
   const oben = rang.filter((o) => o.punkte > 0).slice(0, 8);
-  const wert = (o) => ordnerSchluessel(o.thema, o.unterordner);
-  if (oben.length) {
-    const g = document.createElement('optgroup');
-    g.label = 'Wahrscheinlich';
-    for (const o of oben) g.append(new Option(`${ordnerName(o)}  ·  ${o.gruende.slice(0, 2).join(', ')}`, wert(o)));
-    ordner.append(g);
-  }
   const reihenfolge = Object.keys(zustand.themen);
-  const rest = rang.filter((o) => !oben.includes(o)).sort((a, b) =>
+  const sortiert = [...rang].sort((a, b) =>
     reihenfolge.indexOf(a.thema) - reihenfolge.indexOf(b.thema) || a.unterordner.localeCompare(b.unterordner, 'de'));
-  const g2 = document.createElement('optgroup');
-  g2.label = 'Alle Ordner';
-  for (const o of rest) {
-    const tiefe = o.unterordner ? o.unterordner.split('/').length : 0;
-    const name = tiefe ? o.unterordner.split('/').pop() : ordnerName(o);
-    g2.append(new Option('   '.repeat(tiefe) + name, wert(o)));
-  }
-  ordner.append(g2);
-  const lo = document.createElement('label'); lo.append('Ordner (wahrscheinlichste oben)', ordner);
+  // Suchfeld mit Liste: leer = wahrscheinlichste oben, dann alle; Tippen filtert;
+  // ein Pfad, den es nicht gibt, wird als neuer Ordner angeboten.
+  const suche = document.createElement('input');
+  suche.className = 'ordnersuche';
+  suche.placeholder = 'Tippen zum Suchen oder neuen Pfad, z. B. Versicherungen / HUK / Kfz';
+  suche.autocomplete = 'off';
+  const liste = document.createElement('div');
+  liste.className = 'ordnerliste';
+  liste.setAttribute('role', 'listbox');
+  const lo = document.createElement('label'); lo.append('Ordner (wahrscheinlichste oben, tippen zum Suchen)', suche);
+  const norm = (t) => String(t || '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss');
+  // "Thema / a / b" -> { thema, unterordner }; erstes Glied = Thema (Name oder Schluessel)
+  const zerlegen = (text) => {
+    const teile = String(text).split('/').map((t) => t.trim()).filter(Boolean);
+    if (!teile.length) return null;
+    const passt = Object.entries(zustand.themen).filter(([k, t]) => [k, t.name, t.ablage].some((x) => norm(x) === norm(teile[0])));
+    const anfang = passt.length ? passt : Object.entries(zustand.themen).filter(([k, t]) => norm(t.name || k).startsWith(norm(teile[0])));
+    if (anfang.length === 1) return { thema: anfang[0][0], unterordner: teile.slice(1).join('/') };
+    if (thema.value) return { thema: thema.value, unterordner: teile.join('/') };
+    return null;
+  };
+  let gewaehlt = '';
+  const eintrag = (o, text, klasse = '') => {
+    const d = document.createElement('div');
+    d.className = 'eintrag ' + klasse + (ordnerSchluessel(o.thema, o.unterordner) === gewaehlt ? ' gewaehlt' : '');
+    d.setAttribute('role', 'option');
+    d.textContent = text;
+    d.addEventListener('mousedown', (ev) => ev.preventDefault());
+    d.addEventListener('click', () => waehlen(o));
+    return d;
+  };
+  const kopf = (text) => { const h = document.createElement('div'); h.className = 'kopf'; h.textContent = text; return h; };
+  let erster = null;
+  const zeigen = () => {
+    liste.textContent = '';
+    erster = null;
+    const q = norm(suche.value).split(/[\s/]+/).filter(Boolean);
+    const gewaehltName = gewaehlt ? norm(ordnerName({ thema: gewaehlt.split('\t')[0], unterordner: gewaehlt.split('\t')[1] })) : '';
+    if (!q.length || norm(suche.value) === gewaehltName) {
+      if (oben.length) liste.append(kopf('Wahrscheinlich'));
+      for (const o of oben) liste.append(eintrag(o, `${ordnerName(o)}  ·  ${o.gruende.slice(0, 2).join(', ')}`));
+      liste.append(kopf('Alle Ordner'));
+      for (const o of sortiert) {
+        const tiefe = o.unterordner ? o.unterordner.split('/').length : 0;
+        liste.append(eintrag(o, '\u00a0\u00a0\u00a0'.repeat(tiefe) + (tiefe ? o.unterordner.split('/').pop() : ordnerName(o))));
+      }
+      erster = oben[0] || null;
+      return;
+    }
+    const treffer = rang.filter((o) => { const n = norm(ordnerName(o)); return q.every((w) => n.includes(w)); });
+    const ziel = zerlegen(suche.value);
+    const neuerPfad = ziel && ziel.unterordner && unterordnerGueltig(ziel.unterordner) && !ordnerBekannt(ziel.thema, ziel.unterordner);
+    for (const o of treffer.slice(0, 30)) liste.append(eintrag(o, ordnerName(o) + (o.punkte > 0 ? `  ·  ${o.gruende.slice(0, 2).join(', ')}` : '')));
+    if (neuerPfad) liste.append(eintrag(ziel, `➕ Neuer Ordner: ${ordnerName(ziel)}`, 'neu'));
+    if (!treffer.length && !neuerPfad) liste.append(kopf('Kein Ordner gefunden. Tippe „Thema / Unterordner“ für einen neuen.'));
+    erster = treffer[0] || (neuerPfad ? ziel : null);
+  };
+  suche.addEventListener('input', zeigen);
+  suche.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); if (erster) waehlen(erster); } });
 
   const reihe = document.createElement('div');
   reihe.className = 'reihe';
@@ -564,17 +667,18 @@ function auswahlFelder(vorgabe, kontext = {}) {
   const neu = document.createElement('div');
   neu.className = 'hinweis neu';
   const abgleichen = () => {
-    const k = ordnerSchluessel(thema.value, uo.value.trim().replace(/^\/+|\/+$/g, ''));
-    ordner.value = [...ordner.options].some((o) => o.value === k) ? k : '';
-    neu.textContent = thema.value && uo.value.trim() && !ordnerBekannt(thema.value, uo.value.trim())
+    const u = uo.value.trim().replace(/^\/+|\/+$/g, '');
+    gewaehlt = thema.value ? ordnerSchluessel(thema.value, u) : '';
+    if (document.activeElement !== suche) suche.value = thema.value ? ordnerName({ thema: thema.value, unterordner: u }) : '';
+    neu.textContent = thema.value && u && !ordnerBekannt(thema.value, u)
       ? 'Neuer Ordner: wird beim Ablegen in Drive angelegt.' : '';
+    zeigen();
   };
-  ordner.addEventListener('change', () => {
-    if (!ordner.value) return;
-    const [t, u] = ordner.value.split('\t');
-    thema.value = t; uo.value = u;
+  function waehlen(o) {
+    thema.value = o.thema; uo.value = o.unterordner || '';
+    suche.value = ordnerName(o);
     abgleichen();
-  });
+  }
   thema.addEventListener('change', abgleichen);
   uo.addEventListener('input', abgleichen);
 
@@ -588,12 +692,14 @@ function auswahlFelder(vorgabe, kontext = {}) {
     l.append(c, ' ' + (p.name || k));
     personen.append(l);
   }
-  box.append(lo, reihe, neu, personen);
+  const bezuege = bezuegeFelder(vorgabe);
+  box.append(lo, liste, reihe, neu, personen, bezuege);
   abgleichen();
   box.wert = () => ({
     thema: thema.value,
     unterordner: uo.value.trim(),
     personen: [...personen.querySelectorAll('input:checked')].map((c) => c.value),
+    ...bezuege.werte(),
   });
   box.setzen = (v) => {
     thema.value = v.thema || '';
@@ -601,8 +707,53 @@ function auswahlFelder(vorgabe, kontext = {}) {
     if (v.personen && v.personen.length) {
       personen.querySelectorAll('input').forEach((c) => { c.checked = v.personen.includes(c.value); });
     }
+    bezuege.setzen(v);
     abgleichen();
   };
+  return box;
+}
+
+const notizBezuege = (meta) => ({ weitere_themen: (meta.themen || []).slice(1), objekte: meta.objekte || [], steuer: meta.steuer || [] });
+
+// Neue Vorschlaege anfordern: Feld vorschlag_anfordern in der Notiz, der Abruf
+// fragt die KI (mit Haralds Hinweis) und schreibt den Vorschlag zurueck.
+async function vorschlaegeAnfordern(pfad, hinweis) {
+  await commitMehrere(async () => {
+    const { text } = await dateiLesen(pfad);
+    const n = notizLesen(text);
+    n.meta.vorschlag_anfordern = hinweis.trim() || true;
+    delete n.meta.vorschlag_fehler;
+    return [{ pfad, text: notizSchreiben(n.meta, n.text) }];
+  }, `vorschlag: ${pfad.split('/').pop().replace(/\.md$/, '')} neue Vorschläge angefordert (Web)`);
+  melde('Neue Vorschläge angefordert.', 'gut');
+  await abrufStarten();
+}
+
+// Zeile "Neue Vorschläge" mit Hinweisfeld; Zustand aus der Notiz.
+function anfordernZeile(e) {
+  const box = document.createElement('div');
+  box.className = 'anfordern';
+  const status = document.createElement('div');
+  status.className = 'hinweis';
+  if (e.meta.vorschlag_anfordern) {
+    status.textContent = 'Neue Vorschläge sind angefordert und kommen mit dem laufenden Abruf (etwa 1–2 Minuten, dann neu laden).';
+  } else if (e.meta.vorschlag_fehler) {
+    status.textContent = 'Letzte Anforderung ohne Ergebnis: ' + e.meta.vorschlag_fehler;
+  }
+  const reihe = document.createElement('div');
+  reihe.className = 'reihe';
+  const hinweis = document.createElement('input');
+  hinweis.placeholder = 'Hinweis für die KI (optional), z. B. neues Auto, Kfz-Versicherung';
+  const l = document.createElement('label'); l.append('Passt nichts? Neue Vorschläge der KI', hinweis);
+  const k = knopf('Neue Vorschläge', async () => {
+    k.disabled = true;
+    try {
+      await vorschlaegeAnfordern(e.pfad, hinweis.value);
+      status.textContent = 'Angefordert. Die neuen Vorschläge erscheinen nach dem Abruf (etwa 1–2 Minuten, dann neu laden).';
+    } catch (err) { status.textContent = err.message; k.disabled = false; }
+  }, 'leise');
+  reihe.append(l);
+  box.append(reihe, k, status);
   return box;
 }
 
@@ -681,7 +832,7 @@ function eingangKarte(e) {
   const pre = document.createElement('pre');
   pre.textContent = e.text.replace(/^# .*\n+/, '');
   details.append(summary, pre);
-  karte.append(felder, knoepfe, fehler, details);
+  karte.append(felder, knoepfe, fehler, anfordernZeile(e), details);
   return karte;
 }
 
@@ -712,7 +863,13 @@ async function eingangAblegen(e, w, durch, wie = 'aus Eingang abgelegt', weitere
   delete meta.vorschlag;
   delete meta.konfidenz;
   const thema = zustand.themen[w.thema] || {};
-  meta.themen = [w.thema];
+  meta.themen = [w.thema, ...(w.weitere_themen || []).filter((t) => t !== w.thema && t in zustand.themen)];
+  for (const feld of ['objekte', 'steuer']) {
+    if ((w[feld] || []).length) meta[feld] = w[feld];
+    else delete meta[feld];
+  }
+  delete meta.vorschlag_fehler;
+  delete meta.vorschlag_anfordern;
   meta.personen = w.personen;
   meta.ablage = [jahrOrdner(datum), thema.ablage, unterordnerEinsetzen(w.unterordner, datum)].filter(Boolean).join('/');
   meta.eingeordnet_durch = durch;
@@ -818,7 +975,7 @@ function autoKarte(a) {
       return;
     }
     const thema = (e.meta.themen || [])[0];
-    const felder = auswahlFelder({ thema, unterordner: unterordnerAusAblage(e.meta.ablage, thema), personen: e.meta.personen }, mailKontext(e));
+    const felder = auswahlFelder({ thema, unterordner: unterordnerAusAblage(e.meta.ablage, thema), personen: e.meta.personen, ...notizBezuege(e.meta) }, mailKontext(e));
     const ablage = document.createElement('div');
     ablage.className = 'hinweis';
     ablage.textContent = 'Jetzt: ' + (e.meta.ablage || '');
@@ -1022,7 +1179,7 @@ function mailFormular(m, karte, knoepfe, fehler) {
   const form = document.createElement('div');
   form.className = 'mail-form';
   const z = m.zeile;
-  const vorgabe = z ? {} : { thema: (m.meta.themen || [])[0], unterordner: unterordnerAusAblage(m.meta.ablage, (m.meta.themen || [])[0]), personen: m.meta.personen };
+  const vorgabe = z ? {} : { thema: (m.meta.themen || [])[0], unterordner: unterordnerAusAblage(m.meta.ablage, (m.meta.themen || [])[0]), personen: m.meta.personen, ...notizBezuege(m.meta) };
   const felder = auswahlFelder(vorgabe, z ? { absender: z.absender, betreff: z.betreff, text: z.kurz }
     : mailKontext(m, m.meta.vorschlag));
   const liegt = !!(m.meta && m.meta.mail_pdf);
@@ -1049,7 +1206,18 @@ function mailFormular(m, karte, knoepfe, fehler) {
     } catch (err) { fehler.textContent = err.message; speichern.disabled = false; }
   }, '');
   const abbrechen = knopf('Abbrechen', () => { form.remove(); knoepfe.hidden = false; }, 'leise');
+  const v = !z && m.meta.vorschlag;
+  if (v && v.thema) {
+    const wahl = document.createElement('div');
+    wahl.className = 'hinweis';
+    wahl.append('Vorschläge: ');
+    for (const a of [v, ...(v.alternativen || [])]) {
+      wahl.append(knopf(`${ordnerName(a)} (${Math.round((a.konfidenz || 0) * 100)} %)`, () => felder.setzen(a), 'klein leise'));
+    }
+    form.append(wahl);
+  }
   form.append(felder, haken, hinweis, speichern, abbrechen);
+  if (!z) form.append(anfordernZeile(m));
   karte.insertBefore(form, fehler);
 }
 
@@ -1108,6 +1276,7 @@ async function regelAusMail(e, w) {
   zustand.regelVonMail = e;
   zustand.regelVonVorschlag = null;
   regelFormular(-1, { name, absender: [domain], thema: w.thema, unterordner: w.unterordner, personen: w.personen,
+    weitere_themen: w.weitere_themen, objekte: w.objekte, steuer: w.steuer,
     ...(e.meta.ohne_anhang ? { ohne_anhang: true } : {}), ...(w.mail_drive ? { mail_drive: true } : {}) });
   $('#regel-form-titel').textContent = `Neue Regel aus Mail „${titelVon(e.text)}“`;
   melde('Prüfe die Regel. Beim Speichern wird auch diese Mail abgelegt.');
@@ -1130,8 +1299,12 @@ async function zeigeVerworfen() {
 // Regeln
 
 async function stammdatenLaden() {
-  const [themen, personen, ordner, wissen] = await Promise.all([dateiLesen('config/themen.yaml'), dateiLesen('config/personen.yaml'),
-    dateiOderLeer(ORDNER_DATEI), dateiOderLeer('config/ablagewissen.yaml')]);
+  const [themen, personen, ordner, wissen, bezuege, vertraege] = await Promise.all([dateiLesen('config/themen.yaml'), dateiLesen('config/personen.yaml'),
+    dateiOderLeer(ORDNER_DATEI), dateiOderLeer('config/ablagewissen.yaml'), dateiOderLeer('config/bezuege.yaml'), dateiOderLeer('config/vertraege.yaml')]);
+  zustand.vertraege = (jsyaml.load(vertraege) || {}).vertraege || [];
+  const b = jsyaml.load(bezuege) || {};
+  zustand.objekte = b.objekte || {};
+  zustand.steuer = b.steuer || {};
   zustand.themen = jsyaml.load(themen.text).themen || {};
   zustand.personen = jsyaml.load(personen.text).personen || {};
   zustand.ordner = (jsyaml.load(ordner) || {}).ordner || {};
@@ -1228,6 +1401,10 @@ function regelFormular(index, vorlage) {
     l.append(c, ' ' + (p.name || schluessel));
     box.append(l);
   }
+  const bz = $('#regel-bezuege');
+  bz.textContent = '';
+  zustand.regelBezuege = bezuegeFelder(r);
+  bz.append(zustand.regelBezuege);
   $('#regel-fehler').textContent = '';
   f.hidden = false;
   f.scrollIntoView({ behavior: 'smooth' });
@@ -1265,6 +1442,10 @@ async function regelAbsenden(ereignis) {
   regel.thema = f.thema.value;
   if (f.unterordner.value.trim()) regel.unterordner = f.unterordner.value.trim();
   regel.personen = [...$('#regel-personen').querySelectorAll('input:checked')].map((c) => c.value);
+  for (const [feld, werte] of Object.entries(zustand.regelBezuege ? zustand.regelBezuege.werte() : {})) {
+    const rein = werte.filter((x) => x !== regel.thema);
+    if (rein.length) regel[feld] = rein;
+  }
   const fehler = regelPruefen(regel, zustand.regeln.regeln, zustand.bearbeitet);
   if (fehler) { $('#regel-fehler').textContent = fehler; return; }
   if (zustand.bearbeitet >= 0) zustand.regeln.regeln[zustand.bearbeitet] = regel;

@@ -1,0 +1,12 @@
+# Objekte (worauf sich ein Beleg bezieht) und Steuerbezuege (fuer welche Angabe
+# er zaehlt). Eine Notiz kann mehrere von beiden haben (objekte: [...], steuer: [...]).
+objekte:
+  haus:
+    name: Eigenheim
+  auto:
+    name: Auto
+steuer:
+  werbungskosten:
+    name: Werbungskosten (Anlage N)
+  vorsorge:
+    name: Vorsorge (Versicherungen)
