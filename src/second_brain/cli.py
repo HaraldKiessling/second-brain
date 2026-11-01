@@ -27,6 +27,9 @@ def _ki(wurzel, einst):
                         daten.kontext(wurzel).personen, einst['ki']['max_pro_lauf'],
                         hinweise=einst['ki']['hinweise'],
                         unterordner=daten.bekannte_unterordner(wurzel),
+                        objekte=daten.bezuege(wurzel)['objekte'],
+                        steuer=daten.bezuege(wurzel)['steuer'],
+                        vertraege=daten.vertraege(wurzel),
                         beispiele=einordnen.beispiele_aus_notizen(daten.notiz_pfade(wurzel),
                                                                   daten.themen(wurzel)))
 
@@ -37,7 +40,8 @@ def _einordnen(args):
                   betreff=args.betreff, text='',
                   anhaenge=[(n, b'') for n in args.anhang or []], empfaenger=args.an or '')
     einst = daten.einstellungen(args.daten)
-    e = einordnen.einordnen(m, daten.regelwerk(args.daten), daten.lerner(args.daten), einst)
+    e = einordnen.einordnen(m, daten.regelwerk(args.daten), daten.lerner(args.daten), einst,
+                            vertraege=daten.vertraege(args.daten))
     print('%s, Konfidenz %.2f (%s)' % (e.aktion, e.konfidenz, e.grund))
     v = e.vorschlag if e.vorschlag is not None else e
     if v.thema:
@@ -52,7 +56,8 @@ def _mail_abruf(args):
     ablage = mail.Ablage(args.daten, args.konto, anhang_ziel=args.anhaenge)
     regelwerk = daten.regelwerk(args.daten)
     einst = daten.einstellungen(args.daten)
-    stufen = dict(lerner=daten.lerner(args.daten), einst=einst, ki=_ki(args.daten, einst))
+    stufen = dict(lerner=daten.lerner(args.daten), einst=einst, ki=_ki(args.daten, einst),
+                  vertraege=daten.vertraege(args.daten))
     if args.eml:
         mails = []
         for d in sorted(os.listdir(args.eml)):
@@ -100,6 +105,16 @@ def _nachholen(args):
         return 2
     fertig, fehlt = mail.nachholen(args.daten, args.konto, holen, args.anhaenge)
     print('%s: %d Mails nachgeholt, %d nicht mehr im Postfach' % (args.konto, fertig, fehlt))
+    return 0
+
+
+def _vorschlagen(args):
+    from . import mail
+    einst = daten.einstellungen(args.daten)
+    neu, fehler = mail.neue_vorschlaege(
+        args.daten, args.konto, _ki(args.daten, einst), daten.vertraege(args.daten),
+        daten.regelwerk(args.daten).get('standard_personen', []))
+    print('%s: %d neue Vorschlaege, %d ohne Ergebnis' % (args.konto, neu, fehler))
     return 0
 
 
@@ -168,6 +183,12 @@ def main(argv=None):
     nh.add_argument('--eml', help='statt IMAP: Ordner mit .eml-Dateien')
     nh.add_argument('--anhaenge', help='Verzeichnis fuer Anhaenge und Mail-Seiten')
     nh.set_defaults(fn=_nachholen)
+
+    vs = sub.add_parser('vorschlagen',
+                        help='Neue Ordner-Vorschlaege fuer angeforderte Mails (KI)')
+    vs.add_argument('daten', help='Pfad zum Daten-Repo')
+    vs.add_argument('--konto', required=True)
+    vs.set_defaults(fn=_vorschlagen)
 
     dr = sub.add_parser('drive', help='Anhaenge in die Drive-Ordner hochladen und nachziehen')
     dr.add_argument('daten', help='Pfad zum Daten-Repo')
