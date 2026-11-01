@@ -116,3 +116,49 @@ select.ordnerwahl optgroup { font-style: normal; }
 .ordnerliste .eintrag:hover { background: var(--grund); }
 .ordnerliste .eintrag.gewaehlt { background: var(--akzent); color: #fff; }
 .ordnerliste .eintrag.neu { color: var(--warn); font-weight: 600; }
+
+/* Startseite, Mail-Karte, Einrichtung */
+header .klein { margin: 0; }
+#reiter { position: sticky; top: 0; z-index: 2; background: var(--grund); padding: 8px 0; margin: -8px 0 8px; }
+#reiter button { font-size: 15px; padding: 10px 16px; }
+#reiter .zahnrad { margin-left: auto; }
+.suche-gross { font-weight: 600; color: var(--text); }
+.suche-gross input { font-size: 17px; padding: 12px; }
+.zahl { display: inline-block; min-width: 1.6em; padding: 0 6px; border-radius: 999px; background: var(--warn); color: #fff; font-size: 13px; text-align: center; vertical-align: middle; }
+.zahl:empty { display: none; }
+.entscheidung .ziel, .karte .ziel { margin: 10px 0 6px; padding: 10px 12px; background: var(--grund); border-radius: 8px; border-left: 4px solid var(--akzent); }
+.ziel-kopf { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--leise); }
+.ziel-pfad, .ziel .pfad { font-size: 16px; font-weight: 600; word-break: break-word; }
+.ziel .pfad.leer { color: var(--warn); font-weight: 500; }
+.neu-marke { margin-left: 8px; padding: 1px 6px; font-size: 12px; font-weight: 600; border-radius: 4px; background: var(--warn); color: #fff; vertical-align: middle; }
+.drive-link { font-size: 13px; font-weight: 500; white-space: nowrap; }
+.jahr-hinweis:empty { display: none; }
+.jahr-hinweis { color: var(--warn); }
+ul.waswo { list-style: none; padding: 0; margin: 4px 0 8px; font-size: 14px; }
+ul.waswo li { padding: 2px 0; }
+ul.waswo .symbol { display: inline-block; width: 1.6em; }
+ul.waswo li.hinweis { color: var(--leise); }
+.knoepfe { display: flex; flex-wrap: wrap; align-items: center; }
+.entscheidung .knoepfe > button:first-child:not(.leise) { padding: 10px 22px; font-weight: 600; }
+.editor { margin-top: 10px; padding: 10px; border: 1px dashed var(--linie); border-radius: 8px; }
+.dauerhaft { margin: 8px 0; }
+.dauerhaft select { margin-top: 4px; }
+details.mehr summary, details.mail-text summary, details.von-hand summary { cursor: pointer; color: var(--akzent); font-size: 14px; }
+details.von-hand { margin: 4px 0 8px; }
+button:disabled { opacity: .5; cursor: default; }
+#unterreiter { margin-bottom: 12px; }
+#unterreiter button { padding: 6px 12px; font-size: 14px; }
+.karte.zeile { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.karte.zeile > div, .karte.zeile > input { flex: 1 1 220px; margin: 0; }
+details.themenordner { padding: 6px 0; border-bottom: 1px solid var(--linie); }
+details.themenordner summary { cursor: pointer; }
+ul.ordnerbaum { list-style: none; padding-left: 12px; margin: 4px 0; }
+ul.ordnerbaum li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0; font-size: 14px; }
+@media (max-width: 600px) {
+  main { padding: 8px; }
+  section { padding: 12px; }
+  #reiter button { padding: 8px 12px; font-size: 14px; }
+  .entscheidung .knoepfe > button { flex: 1 1 auto; }
+}
+a { color: var(--akzent); }
+[hidden] { display: none !important; }

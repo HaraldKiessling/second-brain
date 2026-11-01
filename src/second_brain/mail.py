@@ -32,6 +32,7 @@ from html import escape
 import yaml
 
 from . import einordnen as eo
+from . import jahr as jz
 from . import notiz as nz
 from . import regeln
 
@@ -227,8 +228,26 @@ def _absender_kurz(absender):
 
 
 def jahr_ordner(datum, heute=None):
-    heute = heute or datetime.date.today()
-    return '0-%d' % datum.year if datum.year == heute.year else str(datum.year)
+    """Jahresordner fuer ein Datum oder eine Jahreszahl (laufendes Jahr: 0-<jahr>)."""
+    return jz.jahr_ordner(getattr(datum, 'year', datum), heute)
+
+
+def jahr_felder(meta, mail, quelle=None):
+    """Zugehoerigkeitsjahr (jahr.py) und Vorschlag fuer 0000-dauerhaft in die Notiz.
+    quelle: Ergebnis oder Vorschlag der KI mit jahr/dauerhaft. Liefert das Jahr."""
+    anhaenge = [n for n, _ in mail.anhaenge]
+    jahr = getattr(quelle, 'jahr', 0) or 0
+    grund = getattr(quelle, 'jahr_grund', '') if jahr else ''
+    if not jahr:
+        jahr, grund = jz.zugehoerigkeit(mail.betreff, mail.text, anhaenge, mail.datum)
+    if jahr and jahr != mail.datum.year:
+        meta['jahr'] = jahr
+        meta['jahr_grund'] = grund or 'laut KI'
+    dauerhaft = getattr(quelle, 'dauerhaft', '') or jz.dauerhaft_vermutet(
+        mail.betreff, mail.text, anhaenge)
+    if dauerhaft:
+        meta['dauerhaft_vorschlag'] = dauerhaft
+    return jahr or mail.datum.year
 
 
 class Ablage:
@@ -242,6 +261,7 @@ class Ablage:
         with open(os.path.join(wurzel, 'config', 'themen.yaml'), encoding='utf-8') as fh:
             self.themen = (yaml.safe_load(fh) or {}).get('themen', {})
         self.bekannt = self._bekannte_message_ids()
+        self.letzte_meta = {}
 
     def _pfad(self, *teile):
         return os.path.join(self.wurzel, *teile)
@@ -314,7 +334,8 @@ class Ablage:
             meta['ohne_anhang'] = True
         if ergebnis.aktion == regeln.NOTIZ:
             thema = self.themen.get(ergebnis.thema, {})
-            ablage = '/'.join(t for t in (jahr_ordner(mail.datum, self.heute),
+            jahr = jahr_felder(meta, mail, ergebnis)
+            ablage = '/'.join(t for t in (jahr_ordner(jahr, self.heute),
                                           thema.get('ablage', ''),
                                           unterordner_einsetzen(ergebnis.unterordner,
                                                                 mail.datum)) if t)
@@ -335,11 +356,13 @@ class Ablage:
             self._protokoll(durch, 'Notiz `%s` angelegt (%s)' % (nid, ergebnis.grund))
         else:
             meta.update(personen=[], themen=[], offen_grund=ergebnis.grund)
+            jahr_felder(meta, mail, ergebnis.vorschlag)
             if ergebnis.vorschlag is not None:
                 meta['vorschlag'] = ergebnis.vorschlag.als_dict()
             pfad = self._pfad('eingang', nid + '.md')
 
         os.makedirs(os.path.dirname(pfad), exist_ok=True)
+        self.letzte_meta = meta
         with open(pfad, 'w', encoding='utf-8') as fh:
             fh.write(nz.schreiben(nz.Notiz(meta=meta, text=notiz_text(mail))))
         anhaenge_sichern(self.anhang_ziel, nid, mail)
@@ -490,7 +513,8 @@ def nachholen(wurzel, konto, holen, anhang_ziel=None):
                     continue
             m = n.meta
             if m.get('quelle') == konto and (
-                    m.get('nachholen') or (m.get('mail_drive') and not m.get('mail_pdf'))):
+                    m.get('nachholen') or (m.get('mail_drive') and not m.get('mail_pdf'))
+                    or _dauerhaft_offen(m)):
                 auftraege.append((pfad, n))
     if not auftraege:
         return 0, 0
@@ -513,7 +537,8 @@ def nachholen(wurzel, konto, holen, anhang_ziel=None):
         if m is not None:
             anhaenge_sichern(anhang_ziel, n.meta['id'], m)
             fertig += 1
-        if n.meta.get('mail_drive') and not n.meta.get('mail_pdf') and anhang_ziel:
+        if n.meta.get('mail_drive') and (not n.meta.get('mail_pdf') or _dauerhaft_offen(n.meta)) \
+                and anhang_ziel:
             if m is not None:
                 seite = mail_seite(m.absender, m.datum.isoformat(), m.betreff, m.text, m.html,
                                    m.empfaenger)
@@ -525,6 +550,13 @@ def nachholen(wurzel, konto, holen, anhang_ziel=None):
         with open(pfad, 'w', encoding='utf-8') as fh:
             fh.write(nz.schreiben(n))
     return fertig, fehlt
+
+
+def _dauerhaft_offen(m):
+    """Kopie nach 0000-dauerhaft gewuenscht, aber noch nicht dort: die Dateien
+    muessen fuer den Drive-Schritt noch einmal aus dem Postfach kommen."""
+    return bool(m.get('dauerhaft') and not m.get('drive_dauerhaft')
+                and (m.get('anhaenge') or m.get('mail_drive')))
 
 
 def unterordner_einsetzen(unterordner, datum):
@@ -551,6 +583,9 @@ def verarbeiten(mails, ablage, regelwerk, lerner=None, einst=None, ki=None, vert
                 'thema': e.thema or (e.vorschlag.thema if e.vorschlag else ''),
                 'durch': e.durch or (e.vorschlag.durch if e.vorschlag else ''),
                 'konfidenz': round(e.konfidenz, 2), 'grund': e.grund})
+            if ablage.letzte_meta.get('dauerhaft_vorschlag'):
+                # Startseite der Web-App: "Auch in 0000-dauerhaft?" bestaetigen
+                bilanz.eintraege[-1]['dauerhaft'] = ablage.letzte_meta['dauerhaft_vorschlag']
     return bilanz
 
 

@@ -81,6 +81,9 @@ class Vorschlag:
     weitere_themen: list = field(default_factory=list)
     objekte: list = field(default_factory=list)
     steuer: list = field(default_factory=list)
+    jahr: int = 0          # Zugehoerigkeitsjahr laut KI (Geldfluss), 0 = nicht genannt
+    jahr_grund: str = ''
+    dauerhaft: str = ''    # KI: betrifft viele Jahre (Grund), Vorschlag fuer 0000-dauerhaft
 
     def als_dict(self):
         d = {'thema': self.thema, 'unterordner': self.unterordner,
@@ -91,6 +94,12 @@ class Vorschlag:
         for k in ('weitere_themen', 'objekte', 'steuer'):
             if getattr(self, k):
                 d[k] = list(getattr(self, k))
+        if self.jahr:
+            d['jahr'] = self.jahr
+            if self.jahr_grund:
+                d['jahr_grund'] = self.jahr_grund
+        if self.dauerhaft:
+            d['dauerhaft'] = self.dauerhaft
         if self.alternativen:
             d['alternativen'] = [a.als_dict() for a in self.alternativen]
         return d
@@ -514,7 +523,16 @@ class KI:
                 'Bewertungsbitten sind nicht wichtig. Antworte zusaetzlich mit "wichtig": '
                 'true/false.\n')
         hinweise += ('Setze "pdf": true, wenn die Mail selbst als Beleg in die Ablage '
-                     'gehoert (z. B. Buchungsbestaetigung ohne Anhang), sonst false.\n\n')
+                     'gehoert (z. B. Buchungsbestaetigung ohne Anhang), sonst false.\n')
+        hinweise += (
+            'Abgelegt wird im Jahresordner des Jahres, zu dem das Dokument gehoert, nicht '
+            'des Empfangs: mit Geldfluss das Jahr der Zahlung bzw. Faelligkeit oder '
+            'Abbuchung (Beitrag fuer 2027, faellig 01.01.2027 -> 2027; Abrechnung 2026 mit '
+            'Nachzahlung 2027 -> 2027), ohne Geldfluss das Jahr, das es betrifft. Nenne es '
+            'als "jahr" (Zahl) mit "jahr_grund" (kurz), oder 0, wenn nicht erkennbar. '
+            'Betrifft das Dokument viele Jahre (Kauf-, Darlehens-, Miet-, Rentenvertrag, '
+            'Grundbuch, Versicherungsschein, Foerderbescheid), setze "dauerhaft" auf eine '
+            'kurze Begruendung, sonst "".\n\n')
         return (
             'Ordne diese Mail in ein persoenliches Archiv ein. Das Thema ist der '
             'Ordner der Ablage; ein Unterordner ist optional und darf mehrere Ebenen '
@@ -526,7 +544,8 @@ class KI:
             'Wenn mehrere Ordner in Frage kommen, nenne bis zu drei, den besten zuerst, '
             'jeweils mit eigener Konfidenz.\n'
             'Antworte nur mit JSON: {"spam": true/false, "wichtig": true/false, '
-            '"pdf": true/false, "vorschlaege": [{"thema": "<slug>", '
+            '"pdf": true/false, "jahr": <Jahr oder 0>, "jahr_grund": "<kurz>", '
+            '"dauerhaft": "<Grund oder leer>", "vorschlaege": [{"thema": "<slug>", '
             '"unterordner": "<Pfad oder leer>", "personen": ["<slug>"], '
             '"weitere_themen": ["<slug>"], "objekte": ["<slug>"], "steuer": ["<slug>"], '
             '"konfidenz": <0 bis 1>, "grund": "<ein Satz>"}]}\n\n'
@@ -593,8 +612,16 @@ class KI:
         if not liste:
             return None
         liste.sort(key=lambda v: -v.konfidenz)
+        try:
+            jahr = int(daten.get('jahr') or 0)
+        except (TypeError, ValueError):
+            jahr = 0
         for v in liste:
             v.mail_drive = daten.get('pdf') is True
+            if 2000 <= jahr <= 2100:
+                v.jahr, v.jahr_grund = jahr, str(daten.get('jahr_grund') or '')[:120]
+            if isinstance(daten.get('dauerhaft'), str):
+                v.dauerhaft = daten['dauerhaft'].strip()[:120]
         bester, rest = liste[0], liste[1:]
         bester.alternativen = rest
         if rest and bester.konfidenz - rest[0].konfidenz < self.MEHRDEUTIG:
@@ -731,4 +758,5 @@ def _notiz(v):
                            unterordner=v.unterordner, personen=list(v.personen),
                            konfidenz=v.konfidenz, durch=v.durch, mail_drive=v.mail_drive,
                            weitere_themen=list(v.weitere_themen), objekte=list(v.objekte),
-                           steuer=list(v.steuer))
+                           steuer=list(v.steuer), jahr=v.jahr, jahr_grund=v.jahr_grund,
+                           dauerhaft=v.dauerhaft)
