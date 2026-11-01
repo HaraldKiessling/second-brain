@@ -125,11 +125,13 @@ function melde(text, art = '') {
   m.className = art;
 }
 
-function zeigeReiter(name) {
+function zeigeReiter(name, teil) {
+  if (!['start', 'mails', 'einrichtung'].includes(name)) name = 'start';
   document.querySelectorAll('.reiter').forEach((s) => { s.hidden = s.id !== name; });
   document.querySelectorAll('#reiter button').forEach((b) => b.classList.toggle('aktiv', b.dataset.reiter === name));
   merke('sb-reiter', name);
-  return ({ uebersicht: zeigeUebersicht, eingang: zeigeEingang, mails: zeigeMails, zugang: () => { driveCodeZeigen(); kontenZeigen(); return zeigeSecrets(); }, regeln: zeigeRegeln, dateien: zeigeDatei, ablaeufe: zeigeLaeufe })[name]();
+  if (name === 'einrichtung') return zeigeTeil(teil || lade('sb-teil') || 'regeln');
+  return ({ start: zeigeStart, mails: zeigeMails })[name]();
 }
 
 function zelle(zeile, text, klasse) {
@@ -315,8 +317,9 @@ async function driveTesten() {
   let a;
   try {
     await stammdatenLaden();
-    const jahr = '0-' + new Date().getFullYear();
-    const ids = Object.values(zustand.themen).map((t) => (t.drive || {})[jahr]).filter(Boolean);
+    // Laufendes und naechstes Jahr, aeltere Jahresordner und 0000-dauerhaft
+    const ids = [...new Set([...Object.values(zustand.themen).flatMap((t) => Object.values(t.drive || {})),
+      ...Object.values(zustand.jahre || {}), ...(zustand.dauerhaft ? [zustand.dauerhaft.id] : [])].filter(Boolean))];
     // text/plain vermeidet die CORS-Vorabfrage, die Apps-Script nicht beantwortet.
     const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ aktion: 'pruefen', schluessel: driveSchluessel(), ordner_ids: ids }) });
@@ -333,7 +336,7 @@ async function driveTesten() {
   }
   const gut = a.ordner.filter((o) => SCHREIBRECHT.includes(o.recht));
   const schlecht = a.ordner.filter((o) => !gut.includes(o));
-  erg.textContent = `Verbunden als ${a.konto}. ${gut.length} von ${a.ordner.length} Themenordnern beschreibbar.`;
+  erg.textContent = `Verbunden als ${a.konto}. ${gut.length} von ${a.ordner.length} Ordnern beschreibbar.`;
   if (schlecht.length) {
     const ul = document.createElement('ul');
     for (const o of schlecht) {
@@ -375,11 +378,6 @@ function notizSchreiben(meta, text) {
   return `---\n${kopf}\n---\n\n${text.replace(/\n+$/, '')}\n`;
 }
 
-function jahrOrdner(datum) {
-  const jahr = Number(datum.slice(0, 4));
-  return jahr === new Date().getFullYear() ? `0-${jahr}` : String(jahr);
-}
-
 function unterordnerEinsetzen(uo, datum) {
   return (uo || '').replaceAll('{jahr}', datum.slice(0, 4)).replaceAll('{monat}', datum.slice(5, 7)).replace(/^\/+|\/+$/g, '');
 }
@@ -416,28 +414,138 @@ async function eingangLaden() {
   return eintraege.filter(Boolean).sort((a, b) => String(b.meta.erstellt).localeCompare(String(a.meta.erstellt)));
 }
 
-async function zeigeEingang() {
-  const liste = $('#eingang-liste');
-  liste.textContent = 'Lade …';
-  let eintraege;
-  try {
-    await stammdatenLaden();
-    if (!zustand.regeln) {
-      const d = await dateiLesen(REGEL_DATEI);
-      zustand.regeln = JSON.parse(d.text);
-      zustand.regelSha = d.sha;
+// --- Pfade wie in Drive ------------------------------------------------------
+// Harald soll die Ordner so sehen, wie sie in seinem Drive heissen:
+// "2026 › 08Versicherungen › 07HUK_Kfz_624_220429-P". Das laufende Jahr heisst
+// in Drive "0-2026" (damit es oben steht); angezeigt wird nur "2026".
+
+const ZEICHEN = ' › ';
+
+function jahrZahl(schluessel) {
+  const m = /^(?:0-)?(\d{4})$/.exec(String(schluessel || ''));
+  return m ? Number(m[1]) : null;
+}
+
+// Jahresordner fuer eine Jahreszahl (oder ein Datum "2026-10-28")
+function jahrOrdner(jahr) {
+  const j = Number(String(jahr).slice(0, 4));
+  return j === new Date().getFullYear() ? `0-${j}` : String(j);
+}
+
+// ID aus { "0-2026": id, "2025": id } fuer ein Jahr; Schluessel mit oder ohne 0-
+function idFuerJahr(ids, jahr) {
+  for (const [k, v] of Object.entries(ids || {})) if (jahrZahl(k) === Number(jahr)) return v;
+  return '';
+}
+
+function themaOrdner(thema) {
+  const t = zustand.themen[thema] || {};
+  return t.ablage || t.name || thema || '';
+}
+
+// "2026 › 01Gebäude › atu"; ohne Jahr nur Themenordner und Unterordner
+function pfadText(jahr, thema, uo) {
+  return [jahr ? String(jahrZahl(jahr) || jahr) : '', themaOrdner(thema), ...String(uo || '').split('/')]
+    .map((t) => t.trim()).filter(Boolean).join(ZEICHEN);
+}
+
+// Gespeicherte Ablage "0-2026/01Gebäude/atu" -> "2026 › 01Gebäude › atu"
+function ablageText(ablage) {
+  const teile = String(ablage || '').split('/').filter(Boolean);
+  if (teile.length && jahrZahl(teile[0])) teile[0] = String(jahrZahl(teile[0]));
+  return teile.join(ZEICHEN);
+}
+
+function jahrAusAblage(ablage) {
+  return jahrZahl(String(ablage || '').split('/')[0]);
+}
+
+// Link auf den Drive-Ordner: der genaue Unterordner, wenn seine ID bekannt ist
+// (laufendes Jahr, config/ordner.yaml: ids), sonst Themen- oder Jahresordner.
+function ordnerLink(jahr, thema, uo) {
+  const ids = (zustand.themen[thema] || {}).drive || {};
+  const teile = String(uo || '').split('/').map((t) => t.trim()).filter(Boolean);
+  if (`0-${jahr}` in ids) {
+    for (let i = teile.length; i > 0; i--) {
+      const id = (zustand.ordnerIds || {})[`${thema}/${teile.slice(0, i).join('/')}`];
+      if (id) return `https://drive.google.com/drive/folders/${id}`;
     }
-    eintraege = await eingangLaden();
-  } catch (e) { liste.textContent = ''; melde(e.message, 'fehler'); return; }
-  liste.textContent = '';
-  if (!eintraege.length) {
-    const p = document.createElement('p');
-    p.className = 'gut';
-    p.textContent = 'Nichts offen. Alles eingeordnet.';
-    liste.append(p);
   }
-  for (const e of eintraege) liste.append(eingangKarte(e));
-  zeigeVerworfen();
+  const id = idFuerJahr(ids, jahr) || idFuerJahr(zustand.jahre, jahr);
+  return id ? `https://drive.google.com/drive/folders/${id}` : '';
+}
+
+function link(text, href, klasse = '') {
+  const a = document.createElement('a');
+  a.href = href; a.target = '_blank'; a.rel = 'noopener';
+  a.textContent = text;
+  if (klasse) a.className = klasse;
+  return a;
+}
+
+function el(tag, klasse, text) {
+  const e = document.createElement(tag);
+  if (klasse) e.className = klasse;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+// Soll-Ort in Drive wie drive.ziel(): "<ordner-id>:<pfad>".
+function driveZiel(meta) {
+  const thema = (meta.themen || [])[0];
+  const t = zustand.themen[thema] || {};
+  const teile = String(meta.ablage || '').split('/');
+  const jahr = jahrZahl(teile[0]);
+  if (teile.length >= 2 && jahr && teile[1] === t.ablage) {
+    const id = idFuerJahr(t.drive, jahr);
+    if (id) return `${id}:${teile.slice(2).join('/')}`;
+    const jid = idFuerJahr(zustand.jahre, jahr);
+    if (jid) return `${jid}:${teile.slice(1).join('/')}`;
+  }
+  return `:${SAMMELORDNER}/${meta.id}`;
+}
+
+// Was liegt wo: Zeilen [symbol, text, ziel, link, klasse] fuer eine Notiz oder
+// eine geplante Ablage (plan: { pfad, link, mail_drive, dauerhaft }).
+function wasWo(meta, plan) {
+  const zeilen = [];
+  const anhaenge = (meta && meta.anhaenge) || [];
+  const ids = (meta && meta.dateien) || {};
+  const liegt = !plan && meta && meta.drive === driveZiel(meta);
+  for (const a of anhaenge) {
+    const id = ids[String(a).split('/').pop()];
+    const dort = plan ? 'kommt nach' : liegt ? 'liegt in' : meta.drive ? 'wird verschoben nach' : 'kommt nach';
+    zeilen.push(['📎', `Anhang ${a}`, dort, liegt && id ? `https://drive.google.com/file/d/${id}/view` : '', liegt ? 'gut' : '']);
+  }
+  const pdf = plan ? plan.mail_drive : meta && meta.mail_drive;
+  if (pdf) {
+    const da = !plan && meta.mail_pdf && meta.mail_pdf === driveZiel(meta);
+    zeilen.push(['✉️', 'Mail als PDF', da ? 'liegt in' : 'kommt nach',
+      da && meta.mail_pdf_id ? `https://drive.google.com/file/d/${meta.mail_pdf_id}/view` : '', da ? 'gut' : '']);
+  } else if (!plan && meta && meta.mail_pdf) {
+    zeilen.push(['✉️', 'Mail als PDF', 'kommt in den Papierkorb', '', 'warn']);
+  }
+  if (!anhaenge.length && !pdf) zeilen.push(['📝', 'Keine Datei angehängt:', 'nur der Text kommt ins Second Brain. Soll die Mail selbst nach Drive, wähle unter „Mehr“ „Mail als PDF“.', '', 'hinweis']);
+  else zeilen.push(['📝', 'Text und Zusammenfassung', 'im Second Brain (Notiz)', '', 'hinweis']);
+  const dauerhaft = plan ? plan.dauerhaft : meta && meta.dauerhaft;
+  if (dauerhaft) {
+    const da = !plan && meta.drive_dauerhaft;
+    const name = (zustand.dauerhaft && zustand.dauerhaft.name) || '0000-dauerhaft';
+    zeilen.push(['🗄️', 'Kopie', `${da ? 'liegt in' : 'kommt nach'} ${name}${ZEICHEN}${dauerhaft === true ? '' : dauerhaft}`,
+      zustand.dauerhaftOrdner && zustand.dauerhaftOrdner[dauerhaft] ? `https://drive.google.com/drive/folders/${zustand.dauerhaftOrdner[dauerhaft]}` : '', da ? 'gut' : '']);
+  }
+  return zeilen;
+}
+
+function wasWoListe(zeilen, pfad) {
+  const ul = el('ul', 'waswo');
+  for (const [symbol, was, wo, href, klasse] of zeilen) {
+    const li = el('li', klasse);
+    li.append(el('span', 'symbol', symbol), href ? link(was, href) : el('span', '', was), el('span', 'hinweis', ` ${wo}`));
+    if (/kommt nach$|liegt in$|verschoben nach$/.test(wo) && pfad) li.lastChild.textContent += ` ${pfad}`;
+    ul.append(li);
+  }
+  return ul;
 }
 
 // --- Ordnerauswahl ----------------------------------------------------------
@@ -532,9 +640,15 @@ function ordnerRangliste(kontext) {
     .sort((a, b) => b.punkte - a.punkte);
 }
 
+// Ordner so, wie er in Drive heisst: "08Versicherungen › 07HUK_Kfz_624_220429-P"
 function ordnerName(o) {
+  return pfadText('', o.thema, o.unterordner);
+}
+
+// Suchtext eines Ordners: Drive-Name plus Anzeigename des Themas
+function ordnerSuchtext(o) {
   const t = zustand.themen[o.thema] || {};
-  return [t.name || o.thema, ...String(o.unterordner || '').split('/').filter(Boolean)].join(' / ');
+  return `${ordnerName(o)} ${t.name || ''} ${o.thema}`;
 }
 
 function ordnerBekannt(thema, uo) {
@@ -587,6 +701,7 @@ function bezuegeFelder(vorgabe = {}) {
 
 function auswahlFelder(vorgabe, kontext = {}) {
   const box = document.createElement('div');
+  box.className = 'auswahl';
   const rang = ordnerRangliste({ ...kontext, aktuell: !kontext.vorschlag && vorgabe.thema ? vorgabe : null });
   const oben = rang.filter((o) => o.punkte > 0).slice(0, 8);
   const reihenfolge = Object.keys(zustand.themen);
@@ -596,19 +711,20 @@ function auswahlFelder(vorgabe, kontext = {}) {
   // ein Pfad, den es nicht gibt, wird als neuer Ordner angeboten.
   const suche = document.createElement('input');
   suche.className = 'ordnersuche';
-  suche.placeholder = 'Tippen zum Suchen oder neuen Pfad, z. B. Versicherungen / HUK / Kfz';
+  suche.placeholder = 'Ordner suchen, z. B. HUK, oder neuen Pfad: Versicherungen / HUK Kfz';
   suche.autocomplete = 'off';
   const liste = document.createElement('div');
   liste.className = 'ordnerliste';
   liste.setAttribute('role', 'listbox');
-  const lo = document.createElement('label'); lo.append('Ordner (wahrscheinlichste oben, tippen zum Suchen)', suche);
+  const lo = document.createElement('label'); lo.append('Ordner in Drive (wahrscheinlichste oben, tippen zum Suchen)', suche);
   const norm = (t) => String(t || '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss');
   // "Thema / a / b" -> { thema, unterordner }; erstes Glied = Thema (Name oder Schluessel)
   const zerlegen = (text) => {
-    const teile = String(text).split('/').map((t) => t.trim()).filter(Boolean);
+    const teile = String(text).split(/\/|›/).map((t) => t.trim()).filter(Boolean);
     if (!teile.length) return null;
     const passt = Object.entries(zustand.themen).filter(([k, t]) => [k, t.name, t.ablage].some((x) => norm(x) === norm(teile[0])));
-    const anfang = passt.length ? passt : Object.entries(zustand.themen).filter(([k, t]) => norm(t.name || k).startsWith(norm(teile[0])));
+    const ohneNr = (x) => norm(x).replace(/^[\d_\s]+/, '');
+    const anfang = passt.length ? passt : Object.entries(zustand.themen).filter(([k, t]) => [t.name || k, t.ablage].some((x) => ohneNr(x).startsWith(ohneNr(teile[0]))));
     if (anfang.length === 1) return { thema: anfang[0][0], unterordner: teile.slice(1).join('/') };
     if (thema.value) return { thema: thema.value, unterordner: teile.join('/') };
     return null;
@@ -628,7 +744,7 @@ function auswahlFelder(vorgabe, kontext = {}) {
   const zeigen = () => {
     liste.textContent = '';
     erster = null;
-    const q = norm(suche.value).split(/[\s/]+/).filter(Boolean);
+    const q = norm(suche.value).split(/[\s/›]+/).filter(Boolean);
     const gewaehltName = gewaehlt ? norm(ordnerName({ thema: gewaehlt.split('\t')[0], unterordner: gewaehlt.split('\t')[1] })) : '';
     if (!q.length || norm(suche.value) === gewaehltName) {
       if (oben.length) liste.append(kopf('Wahrscheinlich'));
@@ -641,7 +757,7 @@ function auswahlFelder(vorgabe, kontext = {}) {
       erster = oben[0] || null;
       return;
     }
-    const treffer = rang.filter((o) => { const n = norm(ordnerName(o)); return q.every((w) => n.includes(w)); });
+    const treffer = rang.filter((o) => { const n = norm(ordnerSuchtext(o)); return q.every((w) => n.includes(w)); });
     const ziel = zerlegen(suche.value);
     const neuerPfad = ziel && ziel.unterordner && unterordnerGueltig(ziel.unterordner) && !ordnerBekannt(ziel.thema, ziel.unterordner);
     for (const o of treffer.slice(0, 30)) liste.append(eintrag(o, ordnerName(o) + (ordnerBekannt(o.thema, o.unterordner) ? '' : ' (neu)') + (o.punkte > 0 ? `  ·  ${o.gruende.slice(0, 2).join(', ')}` : '')));
@@ -672,7 +788,9 @@ function auswahlFelder(vorgabe, kontext = {}) {
     neu.textContent = thema.value && u && !ordnerBekannt(thema.value, u)
       ? 'Neuer Ordner: wird beim Ablegen in Drive angelegt.' : '';
     zeigen();
+    if (box.beiAenderung && gestartet) box.beiAenderung();
   };
+  let gestartet = false;
   function waehlen(o) {
     thema.value = o.thema; uo.value = o.unterordner || '';
     suche.value = ordnerName(o);
@@ -692,8 +810,22 @@ function auswahlFelder(vorgabe, kontext = {}) {
     personen.append(l);
   }
   const bezuege = bezuegeFelder(vorgabe);
-  box.append(lo, liste, reihe, neu, personen, bezuege);
+  // Thema und Unterordner von Hand: selten noetig, deshalb eingeklappt
+  const hand = document.createElement('details');
+  hand.className = 'von-hand';
+  const hs = document.createElement('summary');
+  hs.textContent = 'Thema und Unterordner von Hand eingeben';
+  hand.append(hs, reihe);
+  const ordnerTeil = document.createElement('div');
+  ordnerTeil.className = 'ordnerwahl';
+  ordnerTeil.append(lo, liste, neu, hand);
+  box.append(ordnerTeil, personen, bezuege);
+  box.teile = { ordner: ordnerTeil, personen, bezuege, suche };
+  box.vorschlagOben = () => oben[0] || {};
   abgleichen();
+  gestartet = true;
+  personen.addEventListener('change', () => box.beiAenderung && box.beiAenderung());
+  bezuege.addEventListener('change', () => box.beiAenderung && box.beiAenderung());
   box.wert = () => ({
     thema: thema.value,
     unterordner: uo.value.trim(),
@@ -762,79 +894,6 @@ function mailKontext(e, vorschlag) {
     anhaenge: e.meta.anhaenge || [], vorschlag };
 }
 
-function eingangKarte(e) {
-  const karte = document.createElement('div');
-  karte.className = 'karte';
-  const h = document.createElement('h3');
-  h.textContent = titelVon(e.text);
-  const info = document.createElement('div');
-  info.className = 'hinweis';
-  info.textContent = `${e.meta.erstellt} · ${absenderAdresse(e) || 'unbekannt'} · ${e.meta.quelle}`;
-  karte.append(h, info);
-
-  const v = e.meta.vorschlag;
-  const vb = document.createElement('div');
-  vb.className = 'vorschlag';
-  if (v && v.thema) {
-    const k = Math.round((v.konfidenz || 0) * 100);
-    const t = (zustand.themen[v.thema] || {}).name || v.thema;
-    vb.innerHTML = '<span class="konfidenz"></span> <span class="was"></span><div class="hinweis grund"></div>';
-    vb.querySelector('.konfidenz').textContent = `Vorschlag (${k} %):`;
-    vb.querySelector('.was').textContent = [t, v.unterordner].filter(Boolean).join(' / ') + ` · ${(v.personen || []).join(', ')}`;
-    vb.querySelector('.grund').textContent = v.grund || '';
-  } else {
-    vb.textContent = 'Kein Vorschlag. ' + (e.meta.offen_grund || '');
-  }
-  karte.append(vb);
-
-  const felder = auswahlFelder(v || {}, mailKontext(e, v));
-  const pdf = pdfHaken(!!(v && v.mail_drive));
-  felder.append(pdf);
-  const wertMitPdf = felder.wert;
-  felder.wert = () => ({ ...wertMitPdf(), mail_drive: pdf.an() });
-  const alternativen = (v && v.alternativen) || [];
-  if (alternativen.length) {
-    const wahl = document.createElement('div');
-    wahl.className = 'hinweis';
-    wahl.append('Mögliche Ordner: ');
-    for (const a of [v, ...alternativen]) {
-      const t = (zustand.themen[a.thema] || {}).name || a.thema;
-      wahl.append(knopf(`${[t, a.unterordner].filter(Boolean).join(' / ')} (${Math.round((a.konfidenz || 0) * 100)} %)`,
-        () => felder.setzen(a), 'klein leise'));
-    }
-    vb.append(wahl);
-  }
-  const fehler = document.createElement('p');
-  fehler.className = 'fehler';
-  const tun = (fn) => async () => {
-    fehler.textContent = '';
-    karte.querySelectorAll('button').forEach((b) => { b.disabled = true; });
-    try { await fn(); } catch (err) { fehler.textContent = err.message; }
-    karte.querySelectorAll('button').forEach((b) => { b.disabled = false; });
-  };
-  const knoepfe = document.createElement('div');
-  knoepfe.append(
-    knopf(v && v.thema ? 'Übernehmen' : 'Ablegen', tun(async () => {
-      const w = felder.wert();
-      const f = auswahlPruefen(w);
-      if (f) { fehler.textContent = f; return; }
-      await eingangAblegen(e, w, 'manuell');
-      karte.remove();
-    }), ''),
-    knopf('Regel aus dieser Mail', () => regelAusMail(e, felder.wert()), 'leise'),
-    knopf('Nur Index', tun(async () => { await eingangVerwerfen(e, false); karte.remove(); }), 'leise'),
-    knopf('Spam', tun(async () => { await eingangVerwerfen(e, true); karte.remove(); }), 'leise'),
-  );
-  const details = document.createElement('details');
-  const summary = document.createElement('summary');
-  summary.textContent = 'Mail anzeigen';
-  const pre = document.createElement('pre');
-  pre.textContent = e.text.replace(/^# .*\n+/, '');
-  details.append(summary, pre);
-  karte.append(felder, knoepfe, fehler, anfordernZeile(e), details);
-  return karte;
-}
-
 function pdfHaken(an, text = 'Mail zusätzlich als PDF in den Drive-Ordner legen (z. B. Buchungsbestätigung)') {
   const l = document.createElement('label');
   l.className = 'haken';
@@ -855,7 +914,9 @@ function auswahlPruefen(w) {
 
 // Eingang -> Notiz unter notizen/<jahr>/<thema>/, mit Protokollzeile, ein Commit.
 // weitere: zusaetzliche Aenderungen fuer denselben Commit (z. B. Indexzeile entfernen).
-async function eingangAblegen(e, w, durch, wie = 'aus Eingang abgelegt', weitere = async () => []) {
+// w.jahr: Jahresordner (Zugehoerigkeit, bei Zahlungen das Jahr des Geldflusses);
+// w.dauerhaft: Unterordner in 0000-dauerhaft fuer eine Kopie oder ''.
+async function eingangAblegen(e, w, durch, wie = 'aus Eingang abgelegt', weitere = async () => [], opts = {}) {
   const meta = { ...e.meta };
   const datum = String(meta.erstellt);
   delete meta.offen_grund;
@@ -870,10 +931,24 @@ async function eingangAblegen(e, w, durch, wie = 'aus Eingang abgelegt', weitere
   delete meta.vorschlag_fehler;
   delete meta.vorschlag_anfordern;
   meta.personen = w.personen;
-  meta.ablage = [jahrOrdner(datum), thema.ablage, unterordnerEinsetzen(w.unterordner, datum)].filter(Boolean).join('/');
+  const jahr = Number(w.jahr || jahrAusAblage(meta.ablage) || datum.slice(0, 4));
+  if (jahr !== Number(datum.slice(0, 4))) {
+    meta.jahr = jahr;
+    meta.jahr_grund = opts.jahrGrund || (meta.jahr_grund && Number(e.meta.jahr) === jahr ? meta.jahr_grund : 'von Harald gewählt');
+  } else {
+    delete meta.jahr;
+    delete meta.jahr_grund;
+  }
+  meta.ablage = [jahrOrdner(jahr), thema.ablage, unterordnerEinsetzen(w.unterordner, `${jahr}${datum.slice(4)}`)].filter(Boolean).join('/');
   meta.eingeordnet_durch = durch;
   if (w.mail_drive) meta.mail_drive = true;
   else if ('mail_drive' in w) delete meta.mail_drive;  // liegt schon ein PDF, raeumt der Abruf es weg
+  if ('dauerhaft' in w) {
+    if (w.dauerhaft) { meta.dauerhaft = w.dauerhaft; delete meta.dauerhaft_nein; } else {
+      delete meta.dauerhaft;  // liegt schon eine Kopie, raeumt der Abruf sie weg
+      if (meta.dauerhaft_vorschlag) meta.dauerhaft_nein = true;
+    }
+  }
   if (!meta.absender && absenderAdresse(e)) meta.absender = absenderAdresse(e);
   const ziel = `notizen/${datum.slice(0, 4)}/${w.thema}/${meta.id}.md`;
   const heute = new Date().toISOString().slice(0, 10);
@@ -882,29 +957,43 @@ async function eingangAblegen(e, w, durch, wie = 'aus Eingang abgelegt', weitere
     { pfad: ziel, text: notizSchreiben(meta, e.text) },
     ...(e.pfad && ziel !== e.pfad ? [{ pfad: e.pfad, loeschen: true }] : []),
     { pfad: protokoll, text: protokollZeile(await dateiOderLeer(protokoll), heute, durch, `Notiz \`${meta.id}\` ${wie}`) },
-    ...await ordnerMerken(w.thema, w.unterordner),
+    ...await ordnerMerken(w.thema, w.unterordner, w.dauerhaft),
     ...await weitere(),
   ], `${!e.pfad ? 'index' : e.pfad.startsWith('eingang/') ? 'eingang' : 'korrektur'}: ${meta.id} -> ${w.thema} (Web)`);
-  melde(`Abgelegt unter ${meta.ablage}.`, 'gut');
+  melde(`Abgelegt in ${ablageText(meta.ablage)}.`, 'gut');
+  e.meta = meta;
+  e.pfad = ziel;
   return ziel;
 }
 
 // Ein neuer Unterordner kommt beim Ablegen in config/ordner.yaml, damit er
-// beim naechsten Mal in der Auswahl steht.
-async function ordnerMerken(thema, uo) {
+// beim naechsten Mal in der Auswahl steht (auch in 0000-dauerhaft).
+async function ordnerMerken(thema, uo, dauerhaft) {
   uo = String(uo || '').trim().replace(/^\/+|\/+$/g, '');
-  if (!uo) return [];
-  const daten = jsyaml.load(await dateiOderLeer(ORDNER_DATEI)) || {};
+  const d = typeof dauerhaft === 'string' ? dauerhaft.trim() : '';
+  const alt = await dateiOderLeer(ORDNER_DATEI);
+  const daten = jsyaml.load(alt) || {};
   const ordner = daten.ordner || {};
-  if ((ordner[thema] || []).map(String).includes(uo)) return [];
-  ordner[thema] = [...new Set([...(ordner[thema] || []).map(String), uo])].sort((a, b) => a.localeCompare(b, 'de'));
+  const neuUo = uo && !(ordner[thema] || []).map(String).includes(uo);
+  const neuD = d && !(d in (daten.dauerhaft || {}));
+  if (!neuUo && !neuD) return [];
+  if (neuUo) ordner[thema] = [...new Set([...(ordner[thema] || []).map(String), uo])].sort((a, b) => a.localeCompare(b, 'de'));
+  if (neuD) daten.dauerhaft = { ...(daten.dauerhaft || {}), [d]: '' };
+  daten.ordner = ordner;
   zustand.ordner = ordner;
-  const kopf = '# Bekannte Unterordner der Drive-Ablage je Thema (Pfad unterhalb des Themenordners,\n'
-    + '# Ebenen mit /). Die Web-App bietet sie in der Ordnerauswahl an und ergaenzt neue beim Ablegen.\n';
-  return [{ pfad: ORDNER_DATEI, text: kopf + jsyaml.dump({ ordner }, { lineWidth: -1 }) }];
+  return [{ pfad: ORDNER_DATEI, text: ordnerDateiText(alt, daten) }];
 }
 
-// Uebersicht: Ablaeufe und automatisch abgelegte Notizen mit Korrektur
+// config/ordner.yaml schreiben, Kopfkommentar behalten
+function ordnerDateiText(alt, daten) {
+  const i = alt.indexOf('\nordner:');
+  const kopf = i >= 0 ? alt.slice(0, i + 1) : '# Bekannte Unterordner der Drive-Ablage je Thema (Pfad unterhalb des Themenordners,\n'
+    + '# Ebenen mit /). Die Web-App bietet sie in der Ordnerauswahl an und ergaenzt neue beim Ablegen.\n';
+  const { ordner, ...rest } = daten;
+  return kopf + jsyaml.dump({ ordner, ...rest }, { lineWidth: -1 });
+}
+
+
 
 function unterordnerAusAblage(ablage, thema) {
   const teile = String(ablage || '').split('/').filter(Boolean);
@@ -918,80 +1007,6 @@ async function laeufeLaden() {
   return texte.join('\n').split('\n').filter(Boolean)
     .map((z) => { try { return JSON.parse(z); } catch { return null; } })
     .filter(Boolean).sort((a, b) => b.zeit.localeCompare(a.zeit));
-}
-
-async function zeigeUebersicht() {
-  const status = $('#ablauf-status');
-  const tbody = $('#lauf-liste');
-  const liste = $('#auto-liste');
-  tbody.textContent = ''; liste.textContent = 'Lade …'; status.textContent = '';
-  let laeufe;
-  try {
-    await stammdatenLaden();
-    if (!zustand.regeln) zustand.regeln = JSON.parse((await dateiLesen(REGEL_DATEI)).text);
-    laeufe = await laeufeLaden();
-    const d = await gh(`/repos/${zustand.repo}/actions/workflows/${MAIL_WORKFLOW}/runs?per_page=1`);
-    const l = d.workflow_runs[0];
-    if (l) {
-      const [text, klasse] = ERGEBNIS[l.conclusion] || [STATUS[l.status] || l.status, ''];
-      status.textContent = `Letzter Abruf: ${new Date(l.created_at).toLocaleString('de-DE')}, ${text}.`;
-      status.className = klasse;
-    }
-  } catch (e) { liste.textContent = ''; melde(e.message, 'fehler'); return; }
-  for (const l of laeufe.slice(0, 15)) {
-    const z = tbody.insertRow();
-    zelle(z, new Date(l.zeit).toLocaleString('de-DE'));
-    zelle(z, l.konto);
-    zelle(z, `${l.notiz} Notizen, ${l.offen} Eingang, ${l.index} Index, ${l.verwerfen} verworfen`);
-  }
-  if (!laeufe.length) zelle(tbody.insertRow(), 'Noch keine Abrufe mit neuen Mails.', 'hinweis');
-  liste.textContent = '';
-  const auto = laeufe.flatMap((l) => (l.eintraege || []).filter((e) => e.aktion === 'notiz' && e.durch !== 'manuell')).slice(0, 30);
-  if (!auto.length) { liste.textContent = 'Noch nichts automatisch abgelegt.'; liste.className = 'hinweis'; }
-  for (const a of auto) liste.append(autoKarte(a));
-}
-
-function autoKarte(a) {
-  const karte = document.createElement('div');
-  karte.className = 'karte';
-  const h = document.createElement('h3');
-  h.textContent = a.titel || '(ohne Betreff)';
-  const info = document.createElement('div');
-  info.className = 'hinweis';
-  const t = (zustand.themen[a.thema] || {}).name || a.thema;
-  info.textContent = `${a.absender} · ${t} · ${a.durch}${a.konfidenz < 1 ? ` (${Math.round(a.konfidenz * 100)} %)` : ''}`;
-  const fehler = document.createElement('p');
-  fehler.className = 'fehler';
-  karte.append(h, info);
-  karte.append(knopf('Korrigieren', async (ev) => {
-    ev.target.remove();
-    let e;
-    try {
-      const { text } = await dateiLesen(a.pfad);
-      e = { pfad: a.pfad, ...notizLesen(text) };
-    } catch {
-      fehler.textContent = 'Notiz wurde inzwischen verschoben oder gelöscht.';
-      return;
-    }
-    const thema = (e.meta.themen || [])[0];
-    const felder = auswahlFelder({ thema, unterordner: unterordnerAusAblage(e.meta.ablage, thema), personen: e.meta.personen, ...notizBezuege(e.meta) }, mailKontext(e));
-    const ablage = document.createElement('div');
-    ablage.className = 'hinweis';
-    ablage.textContent = 'Jetzt: ' + (e.meta.ablage || '');
-    karte.insertBefore(ablage, fehler);
-    karte.insertBefore(felder, fehler);
-    karte.insertBefore(knopf('Speichern', async () => {
-      const w = felder.wert();
-      const f = auswahlPruefen(w);
-      if (f) { fehler.textContent = f; return; }
-      try {
-        a.pfad = await eingangAblegen(e, w, 'manuell', 'korrigiert');
-        ablage.textContent = 'Jetzt: ' + [jahrOrdner(String(e.meta.erstellt)), (zustand.themen[w.thema] || {}).ablage, unterordnerEinsetzen(w.unterordner, String(e.meta.erstellt))].filter(Boolean).join('/');
-        felder.remove();
-      } catch (err) { fehler.textContent = err.message; }
-    }, ''), fehler);
-  }, 'klein leise'), fehler);
-  return karte;
 }
 
 // Mails: alle Mails eines Monats mit Ablageort; Ablage aendern, Indexmail zur
@@ -1017,15 +1032,6 @@ function absenderKurz(absender) {
 }
 
 const adresseVon = (absender) => ((/<([^>]+)>/.exec(absender) || [, absender])[1] || '').trim().toLowerCase();
-
-// Soll-Ort in Drive wie drive.ziel(): "<ordner-id>:<pfad>".
-function driveZiel(meta) {
-  const t = zustand.themen[(meta.themen || [])[0]] || {};
-  const teile = String(meta.ablage || '').split('/');
-  const id = (t.drive || {})[teile[0]];
-  if (teile.length >= 2 && teile[1] === t.ablage && id) return `${id}:${teile.slice(2).join('/')}`;
-  return `:${SAMMELORDNER}/${meta.id}`;
-}
 
 async function baumLaden() {
   const d = await gh(`/repos/${zustand.repo}/git/trees/main?recursive=1`);
@@ -1054,6 +1060,348 @@ async function mailsLaden(monat, pfade) {
   return alle.sort((a, b) => datum(b).localeCompare(datum(a)));
 }
 
+// --- Eine Mail entscheiden ---------------------------------------------------
+// Eine Karte fuer alle Faelle: offene Mail (Eingang), abgelegte Notiz und nur
+// gemerkte oder aussortierte Mail (Index). Oben steht, wo die Mail liegt bzw.
+// hinkommt, als echter Drive-Pfad mit Link, darunter was genau dorthin kommt.
+// Drei Knoepfe fuer den haeufigen Fall, alles andere unter "Mehr".
+
+function jahrWahl(vorgabe, datum) {
+  const s = document.createElement('select');
+  const jahre = new Set([...Object.keys(zustand.jahre || {}).map(jahrZahl), Number(String(datum).slice(0, 4)), Number(vorgabe)]
+    .filter(Boolean));
+  for (const j of [...jahre].sort((a, b) => b - a)) {
+    s.add(new Option(String(j) + (j === new Date().getFullYear() ? ' (laufendes Jahr)' : ''), String(j), false, j === Number(vorgabe)));
+  }
+  return s;
+}
+
+// "Auch als Kopie in 0000-dauerhaft" mit Unterordner (vorgewaehlt nach Objekt)
+function dauerhaftFeld(an, ordner, objekte = []) {
+  const box = el('div', 'dauerhaft');
+  const l = el('label', 'haken');
+  const c = document.createElement('input');
+  c.type = 'checkbox'; c.checked = !!an;
+  const name = (zustand.dauerhaft && zustand.dauerhaft.name) || '0000-dauerhaft';
+  l.append(c, `Auch als Kopie in ${name} (betrifft viele Jahre)`);
+  const wahl = document.createElement('select');
+  wahl.add(new Option('– Unterordner wählen –', ''));
+  const norm = (t) => String(t || '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss').replace(/[^a-z0-9]/g, '');
+  const namen = Object.keys(zustand.dauerhaftOrdner || {}).sort((a, b) => a.localeCompare(b, 'de'));
+  let vor = typeof ordner === 'string' ? ordner : '';
+  if (!vor) {
+    for (const o of objekte) {
+      const k = norm(o).replace(/^\d+/, '');
+      const treffer = namen.find((n) => norm(n).replace(/^\d+/, '').includes(k) || k.includes(norm(n).replace(/^\d+/, '')));
+      if (treffer) { vor = treffer; break; }
+    }
+  }
+  for (const n of namen) wahl.add(new Option(n, n, false, n === vor));
+  if (vor && !namen.includes(vor)) wahl.add(new Option(`${vor} (neu)`, vor, false, true));
+  wahl.add(new Option('➕ Neuer Unterordner …', '+'));
+  wahl.hidden = !c.checked;
+  c.addEventListener('change', () => { wahl.hidden = !c.checked; box.dispatchEvent(new Event('aenderung', { bubbles: true })); });
+  wahl.addEventListener('change', () => {
+    if (wahl.value === '+') {
+      const neu = (prompt('Name des neuen Unterordners in ' + name) || '').trim();
+      if (neu && unterordnerGueltig(neu)) { wahl.add(new Option(`${neu} (neu)`, neu, false, true), wahl.options.length - 1); wahl.value = neu; } else wahl.value = '';
+    }
+    box.dispatchEvent(new Event('aenderung', { bubbles: true }));
+  });
+  box.append(l, wahl);
+  box.wert = () => (c.checked ? (wahl.value && wahl.value !== '+' ? wahl.value : true) : '');
+  box.an = () => c.checked;
+  return box;
+}
+
+// art: 'eingang' | 'notiz' | 'index' (auch aussortiert); e wie aus eingangLaden/mailsLaden
+function entscheidungKarte(e, art, fertig = () => {}) {
+  const z = e.zeile;
+  const meta = e.meta || {};
+  const datum = String(z ? z.datum : meta.erstellt);
+  const karte = el('div', 'karte entscheidung');
+  karte.append(el('h3', '', z ? (z.betreff || '(ohne Betreff)') : titelVon(e.text)));
+  karte.append(el('div', 'hinweis', z ? `${z.datum} · ${z.absender} · ${z.konto}` : `${meta.erstellt} · ${absenderAdresse(e) || 'unbekannt'} · ${meta.quelle}`));
+
+  const v = art === 'eingang' ? meta.vorschlag : null;
+  const thema0 = art === 'notiz' ? (meta.themen || [])[0] : '';
+  const vorgabe = art === 'notiz'
+    ? { thema: thema0, unterordner: unterordnerAusAblage(meta.ablage, thema0), personen: meta.personen, ...notizBezuege(meta),
+      jahr: jahrAusAblage(meta.ablage) || Number(datum.slice(0, 4)) }
+    : { ...(v && v.thema ? v : {}), jahr: meta.jahr || (v && v.jahr) || Number(datum.slice(0, 4)) };
+  const vorschlagJahr = meta.jahr || (v && v.jahr) || null;
+  const vorschlagJahrGrund = meta.jahr_grund || (v && v.jahr_grund) || '';
+
+  // Wo es liegt / hinkommt
+  const ziel = el('div', 'ziel');
+  const zielKopf = el('div', 'ziel-kopf');
+  const zielPfad = el('div', 'ziel-pfad');
+  const zielInfo = el('div', 'hinweis');
+  const jahrHinweis = el('div', 'hinweis jahr-hinweis');
+  ziel.append(zielKopf, zielPfad, jahrHinweis, zielInfo);
+  const waswo = el('div');
+  karte.append(ziel, waswo);
+
+  // Bearbeiten: Ordnersuche und Jahr (bei offener Mail ohne Vorschlag gleich offen)
+  const editor = el('div', 'editor');
+  const felder = auswahlFelder(vorgabe, z ? { absender: z.absender, betreff: z.betreff, text: z.kurz } : mailKontext(e, v));
+  const jahr = jahrWahl(vorgabe.jahr, datum);
+  const lj = el('label', '', 'Jahresordner (gehört zu welchem Jahr? Bei Zahlungen das Jahr des Geldflusses)');
+  lj.append(jahr);
+  editor.append(felder.teile.ordner, lj);
+  editor.hidden = !(art === 'eingang' && !(v && v.thema)) && art !== 'index';
+  if (z) editor.hidden = true;
+
+  // Mehr
+  const mehr = el('details', 'mehr');
+  mehr.append(el('summary', '', 'Mehr: Personen, Themen, Steuer, Mail als PDF, Regel …'));
+  const pdf = pdfHaken(art === 'notiz' ? !!meta.mail_drive : !!(v && v.mail_drive),
+    meta.mail_pdf ? 'Mail als PDF in Drive (Haken weg: PDF kommt in den Ordner „Second Brain Papierkorb“)' : undefined);
+  const dauerhaft = dauerhaftFeld(art === 'notiz' ? !!meta.dauerhaft : !!(meta.dauerhaft_vorschlag || (v && v.dauerhaft)),
+    meta.dauerhaft, vorgabe.objekte || meta.objekte || []);
+  const dauerhaftVorne = !!(meta.dauerhaft || meta.dauerhaft_vorschlag || (v && v.dauerhaft));
+  if (meta.dauerhaft_vorschlag && !meta.dauerhaft) dauerhaft.append(el('div', 'hinweis', `Vorschlag: ${meta.dauerhaft_vorschlag}`));
+  mehr.append(felder.teile.personen, felder.teile.bezuege, pdf, ...(dauerhaftVorne ? [] : [dauerhaft]));
+
+  const fehler = el('p', 'fehler');
+  const knoepfe = el('div', 'knoepfe');
+  let bearbeitet = false;
+  let haupt = null;
+  const wert = () => ({ ...felder.wert(), jahr: Number(jahr.value), mail_drive: pdf.an(), dauerhaft: dauerhaft.wert() });
+
+  const aktualisieren = () => {
+    const w = wert();
+    const j = Number(jahr.value);
+    const uo = unterordnerEinsetzen(w.unterordner, `${j}${datum.slice(4)}`);
+    const offen = art === 'eingang' || art === 'index';
+    const offenEditor = !editor.hidden;
+    zielKopf.textContent = art === 'notiz' && !bearbeitet ? 'Liegt in' : z && !offenEditor ? (z.verworfen ? 'Aussortiert' : 'Nur gemerkt') : offen ? 'Wird abgelegt in' : 'Kommt nach';
+    zielPfad.textContent = '';
+    if (z && !offenEditor) {
+      zielPfad.append(el('span', 'pfad', z.verworfen ? String(z.verworfen) : 'auffindbar, aber nicht abgelegt'));
+    } else if (w.thema) {
+      const neu = w.unterordner && !ordnerBekannt(w.thema, w.unterordner);
+      zielPfad.append(el('span', 'pfad', pfadText(j, w.thema, uo)));
+      if (neu) zielPfad.append(el('span', 'neu-marke', 'neuer Ordner'));
+      const href = ordnerLink(j, w.thema, uo);
+      if (href) zielPfad.append(' ', link('in Drive öffnen', href, 'drive-link'));
+    } else {
+      zielPfad.append(el('span', 'pfad leer', 'Noch kein Ordner. Tippe unten, um einen zu suchen.'));
+    }
+    const empfangen = Number(datum.slice(0, 4));
+    jahrHinweis.textContent = j !== empfangen
+      ? `Gehört zu ${j}, empfangen ${empfangen}${j === vorschlagJahr && vorschlagJahrGrund ? `: ${vorschlagJahrGrund}` : ''}.` : '';
+    if (art === 'eingang' && v && v.thema && !bearbeitet) {
+      zielInfo.textContent = `Vorschlag, unsicher. ${v.grund || ''}`.trim();
+    } else if (art === 'notiz' && !bearbeitet) {
+      const durch = String(meta.eingeordnet_durch || '');
+      zielInfo.textContent = durch === 'manuell' ? 'Von dir abgelegt.' : durch ? `Automatisch abgelegt (${durch.startsWith('regel/') ? 'Regel ' + durch.slice(6) : durch.startsWith('vertrag/') ? 'Vertrag ' + durch.slice(8) : durch.startsWith('ki/') ? 'KI' : 'gelernt'}${meta.konfidenz && meta.konfidenz < 1 ? ', unsicher' : ''}).` : '';
+    } else {
+      zielInfo.textContent = bearbeitet && w.thema ? 'Von dir gewählt.' : '';
+    }
+    waswo.textContent = '';
+    const ort = w.thema ? pfadText(j, w.thema, uo) : '';
+    if (z && offenEditor) {
+      const zeilen = [['📥', 'Anhänge, falls vorhanden,', 'werden aus dem Postfach geholt und kommen nach', '', ''],
+        ['📝', 'Text und Zusammenfassung', 'im Second Brain (Notiz)', '', 'hinweis']];
+      if (w.mail_drive) zeilen.splice(1, 0, ['✉️', 'Mail als PDF', 'kommt nach', '', '']);
+      waswo.append(wasWoListe(zeilen, ort));
+    } else if (!z) {
+      const plan = art === 'notiz' && !bearbeitet ? null : { mail_drive: w.mail_drive, dauerhaft: w.dauerhaft };
+      waswo.append(wasWoListe(wasWo(meta, plan), ort));
+    }
+    if (haupt) {
+      haupt.disabled = !w.thema;
+      haupt.textContent = art === 'eingang' ? (bearbeitet ? 'So ablegen' : 'Passt so') : art === 'index' ? 'Ablegen' : 'Speichern';
+      haupt.hidden = (art === 'notiz' || !!z) && !offenEditor;
+    }
+  };
+  felder.beiAenderung = () => { bearbeitet = true; aktualisieren(); };
+  jahr.addEventListener('change', () => { bearbeitet = true; aktualisieren(); });
+  karte.addEventListener('aenderung', () => { bearbeitet = true; aktualisieren(); });
+  karte.addEventListener('change', (ev) => { if (mehr.contains(ev.target)) { bearbeitet = true; aktualisieren(); } });
+
+  const tun = (fn) => async () => {
+    fehler.textContent = '';
+    karte.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    try { await fn(); } catch (err) { fehler.textContent = err.message; }
+    karte.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+    aktualisieren();
+  };
+  const speichern = async () => {
+    const w = wert();
+    const f = auswahlPruefen(w);
+    if (f) { fehler.textContent = f; if (editor.hidden) editor.hidden = false; return; }
+    if (w.dauerhaft === true) { fehler.textContent = 'Bitte den Unterordner in 0000-dauerhaft wählen.'; return; }
+    if (art === 'eingang') {
+      await eingangAblegen(e, w, 'manuell', 'aus Eingang abgelegt', undefined, { jahrGrund: w.jahr === vorschlagJahr ? vorschlagJahrGrund : '' });
+      if (w.dauerhaft) await abrufStarten();
+    } else if (art === 'index') {
+      await indexAblegen(e, w);
+      await abrufStarten();
+    } else {
+      const neu = w.mail_drive !== !!meta.mail_drive || w.dauerhaft !== (meta.dauerhaft || '');
+      const wie = w.mail_drive && !meta.mail_drive ? 'korrigiert, Mail als PDF für Drive vorgemerkt'
+        : !w.mail_drive && meta.mail_drive ? 'korrigiert, Mail-PDF abgewählt' : 'korrigiert';
+      await eingangAblegen(e, w, 'manuell', wie, undefined, { jahrGrund: w.jahr === jahrAusAblage(meta.ablage) ? meta.jahr_grund : '' });
+      if (neu || meta.drive || meta.mail_pdf) await abrufStarten();
+    }
+    zustand.alle = null;
+    fertig(karte);
+  };
+  haupt = knopf('Passt so', tun(speichern), '');
+  if (art === 'eingang') {
+    knoepfe.append(haupt,
+      knopf('Anderer Ordner', () => { editor.hidden = !editor.hidden; if (!editor.hidden) felder.teile.suche.focus(); }, 'leise'),
+      knopf('Unwichtig', tun(async () => { await eingangVerwerfen(e, false); zustand.alle = null; fertig(karte); }), 'leise'));
+  } else if (art === 'notiz') {
+    knoepfe.append(knopf('Ändern', (ev) => { editor.hidden = false; ev.target.hidden = true; aktualisieren(); felder.teile.suche.focus(); }, 'leise'), haupt);
+  } else if (z.message_id) {
+    knoepfe.append(knopf(z.verworfen ? 'Doch ablegen' : 'Ablegen', (ev) => {
+      editor.hidden = false; ev.target.hidden = true;
+      const oben = felder.vorschlagOben();
+      if (oben.thema) felder.setzen(oben);
+      mehr.hidden = false;  // Personen, Mail als PDF (oft der Grund: Buchungsbestaetigung)
+      aktualisieren(); felder.teile.suche.focus();
+    }, 'leise'), haupt);
+  } else {
+    knoepfe.append(el('span', 'hinweis', 'Ohne Message-ID, kann nicht aus dem Postfach geholt werden.'));
+  }
+  if (art !== 'index') {
+    mehr.append(el('div', 'knoepfe',));
+    mehr.lastChild.append(knopf('Regel aus dieser Mail', () => regelAusMail(e, wert()), 'leise klein'));
+    if (art === 'eingang') {
+      mehr.lastChild.append(knopf('Werbung: Absender immer aussortieren', tun(async () => { await eingangVerwerfen(e, true); zustand.alle = null; fertig(karte); }), 'leise klein'));
+    }
+    mehr.append(anfordernZeile(e));
+  }
+  const anzeigen = el('details', 'mail-text');
+  anzeigen.append(el('summary', '', 'Mail anzeigen'), el('pre', '', z ? (z.kurz || '') : e.text.replace(/^# .*\n+/, '').split(/\n<!-- ablage -->/)[0]));
+  if (z) mehr.hidden = true;
+  karte.append(...(dauerhaftVorne ? [dauerhaft] : []), knoepfe, editor, fehler, mehr, anzeigen);
+  aktualisieren();
+  return karte;
+}
+
+// --- Startseite: Suchen und Zu erledigen -----------------------------------
+
+async function zeigeStart() {
+  const liste = $('#eingang-liste');
+  liste.textContent = 'Lade …';
+  let eintraege, laeufe;
+  try {
+    await stammdatenLaden();
+    if (!zustand.regeln) {
+      const d = await dateiLesen(REGEL_DATEI);
+      zustand.regeln = JSON.parse(d.text);
+      zustand.regelSha = d.sha;
+    }
+    [eintraege, laeufe] = await Promise.all([eingangLaden(), laeufeLaden()]);
+  } catch (e) { liste.textContent = ''; melde(e.message, 'fehler'); return; }
+  liste.textContent = '';
+  $('#offen-zahl').textContent = eintraege.length ? String(eintraege.length) : '';
+  if (!eintraege.length) liste.append(el('p', 'gut', 'Nichts zu erledigen. Alles ist abgelegt.'));
+  for (const e of eintraege) {
+    liste.append(entscheidungKarte(e, 'eingang', (karte) => {
+      karte.remove();
+      const rest = liste.querySelectorAll('.karte').length;
+      $('#offen-zahl').textContent = rest ? String(rest) : '';
+      if (!rest) liste.append(el('p', 'gut', 'Nichts zu erledigen. Alles ist abgelegt.'));
+    }));
+  }
+  startStatus(laeufe);
+  zeigeDauerhaftFragen(laeufe);
+  zeigeVerworfen();
+}
+
+async function startStatus(laeufe) {
+  const status = $('#ablauf-status');
+  const auto = $('#auto-zeile');
+  auto.textContent = '';
+  try {
+    const d = await gh(`/repos/${zustand.repo}/actions/workflows/${MAIL_WORKFLOW}/runs?per_page=1`);
+    const l = d.workflow_runs[0];
+    if (l) {
+      const [text, klasse] = ERGEBNIS[l.conclusion] || [STATUS[l.status] || l.status, ''];
+      status.textContent = `Letzter Abruf: ${new Date(l.created_at).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' })}, ${text}.`;
+      status.className = 'hinweis ' + klasse;
+    }
+  } catch { /* Status ist nur Beiwerk */ }
+  const grenze = Date.now() - 2 * 24 * 3600 * 1000;
+  const neu = laeufe.filter((l) => new Date(l.zeit).getTime() >= grenze)
+    .flatMap((l) => (l.eintraege || []).filter((x) => x.aktion === 'notiz' && x.durch !== 'manuell'));
+  if (neu.length) {
+    auto.append(`${neu.length} ${neu.length === 1 ? 'Mail wurde' : 'Mails wurden'} seit gestern automatisch abgelegt. `,
+      knopf('Ansehen und prüfen', () => { $('#mails-art').value = 'auto'; merke('sb-mails-monat', ''); $('#mails-monat').value = ''; zeigeReiter('mails'); }, 'leise klein'));
+  }
+}
+
+// Automatisch abgelegte Dokumente, die viele Jahre betreffen: Kopie nach 0000-dauerhaft?
+async function zeigeDauerhaftFragen(laeufe) {
+  const bereich = $('#dauerhaft-bereich');
+  const liste = $('#dauerhaft-liste');
+  liste.textContent = '';
+  const kandidaten = [...new Map(laeufe.flatMap((l) => (l.eintraege || []).filter((x) => x.aktion === 'notiz' && x.dauerhaft))
+    .map((x) => [x.pfad, x])).values()].slice(0, 10);
+  const offen = (await Promise.all(kandidaten.map(async (x) => {
+    try { const n = notizLesen((await dateiLesen(x.pfad)).text); return { pfad: x.pfad, ...n }; } catch { return null; }
+  }))).filter((n) => n && n.meta.dauerhaft_vorschlag && !n.meta.dauerhaft && !n.meta.dauerhaft_nein);
+  bereich.hidden = !offen.length;
+  for (const n of offen) {
+    const karte = el('div', 'karte');
+    karte.append(el('h3', '', titelVon(n.text)), el('div', 'hinweis', `${n.meta.erstellt} · liegt in ${ablageText(n.meta.ablage)} · ${n.meta.dauerhaft_vorschlag}`));
+    const feld = dauerhaftFeld(true, '', n.meta.objekte || []);
+    feld.querySelector('label').hidden = true;
+    const fehler = el('p', 'fehler');
+    const merken = async (wert) => {
+      await commitMehrere(async () => {
+        const akt = notizLesen((await dateiLesen(n.pfad)).text);
+        if (wert) akt.meta.dauerhaft = wert; else akt.meta.dauerhaft_nein = true;
+        return [{ pfad: n.pfad, text: notizSchreiben(akt.meta, akt.text) }];
+      }, `dauerhaft: ${n.meta.id} ${wert ? '-> ' + wert : 'nein'} (Web)`);
+    };
+    karte.append(feld,
+      knopf('Ja, Kopie anlegen', async () => {
+        const w = feld.wert();
+        if (!w || w === true) { fehler.textContent = 'Bitte den Unterordner wählen.'; return; }
+        try { await merken(w); melde(`Kopie nach ${w} vorgemerkt.`, 'gut'); await abrufStarten(); karte.remove(); } catch (e) { fehler.textContent = e.message; }
+      }, ''),
+      knopf('Nein', async () => { try { await merken(''); karte.remove(); } catch (e) { fehler.textContent = e.message; } }, 'leise'),
+      fehler);
+    liste.append(karte);
+  }
+}
+
+// Suche ueber alle Monate: Absender, Betreff, Ordner
+async function alleMailsLaden() {
+  if (zustand.alle) return zustand.alle;
+  zustand.pfade = await baumLaden();
+  const monate = monateAus(zustand.pfade);
+  const listen = await Promise.all(monate.map((m) => mailsLaden(m, zustand.pfade)));
+  zustand.alle = listen.flat();
+  return zustand.alle;
+}
+
+let suchNummer = 0;
+async function suchen() {
+  const q = $('#such-feld').value.trim().toLowerCase();
+  const ziel = $('#such-ergebnis');
+  const nr = ++suchNummer;
+  $('#start-inhalt').hidden = q.length >= 2;
+  if (q.length < 2) { ziel.textContent = ''; return; }
+  ziel.textContent = zustand.alle ? '' : 'Suche in allen Monaten …';
+  let alle;
+  try { alle = await alleMailsLaden(); } catch (e) { ziel.textContent = e.message; return; }
+  if (nr !== suchNummer) return;
+  const woerter = q.split(/\s+/);
+  const treffer = alle.filter((m) => { const t = mailText(m).toLowerCase(); return woerter.every((w) => t.includes(w)); });
+  ziel.textContent = '';
+  ziel.append(el('p', 'hinweis', treffer.length ? `${treffer.length} ${treffer.length === 1 ? 'Treffer' : 'Treffer'}${treffer.length > 30 ? ', die neuesten 30' : ''}.` : 'Nichts gefunden.'));
+  for (const m of treffer.slice(0, 30)) ziel.append(mailKarte(m));
+}
+
+// --- Alle Mails ----------------------------------------------------------------
+
 async function zeigeMails(neu = true) {
   const liste = $('#mails-liste');
   const wahl = $('#mails-monat');
@@ -1074,151 +1422,35 @@ async function zeigeMails(neu = true) {
   const art = $('#mails-art').value;
   const suche = $('#mails-suche').value.trim().toLowerCase();
   const inDrive = (m) => m.art === 'notiz' && !!(m.meta.drive || m.meta.mail_pdf || m.meta.mail_drive);
-  const passt = (m) => (!art || m.art === art || (art === 'drive' && inDrive(m))) && (!suche || mailText(m).toLowerCase().includes(suche));
+  const auto = (m) => m.art === 'notiz' && m.meta.eingeordnet_durch && m.meta.eingeordnet_durch !== 'manuell';
+  const passt = (m) => (!art || m.art === art || (art === 'drive' && inDrive(m)) || (art === 'auto' && auto(m)))
+    && (!suche || suche.split(/\s+/).every((w) => mailText(m).toLowerCase().includes(w)));
   const gezeigt = zustand.mails.filter(passt);
   const zahl = (a) => zustand.mails.filter((m) => m.art === a).length;
-  $('#mails-zahl').textContent = `${zustand.mails.length} Mails: ${zahl('notiz')} Notizen (${zustand.mails.filter(inDrive).length} mit Dateien in Drive), ${zahl('eingang')} im Eingang, ${zahl('index')} nur im Index, ${zahl('verworfen')} verworfen.`;
+  $('#mails-zahl').textContent = `${zustand.mails.length} Mails: ${zahl('notiz')} abgelegt (${zustand.mails.filter(inDrive).length} mit Dateien in Drive), ${zahl('eingang')} offen, ${zahl('index')} nur gemerkt, ${zahl('verworfen')} aussortiert.`;
   liste.textContent = '';
   for (const m of gezeigt.slice(0, 200)) liste.append(mailKarte(m));
-  if (!gezeigt.length) { const p = document.createElement('p'); p.className = 'hinweis'; p.textContent = 'Keine passenden Mails.'; liste.append(p); }
+  if (!gezeigt.length) liste.append(el('p', 'hinweis', 'Keine passenden Mails.'));
 }
 
 function mailText(m) {
-  return m.zeile ? `${m.zeile.absender} ${m.zeile.betreff}` : `${m.meta.absender || ''} ${titelVon(m.text)}`;
-}
-
-function ortText(meta) {
-  const thema = (meta.themen || [])[0];
-  const t = zustand.themen[thema] || {};
-  return [t.name || thema, unterordnerAusAblage(meta.ablage, thema)].filter(Boolean).join(' / ');
-}
-
-// Zeilen zum Drive-Stand einer Notiz: [text, klasse]
-function driveStand(meta) {
-  const soll = driveZiel(meta);
-  const zeilen = [];
-  if (meta.nachholen) zeilen.push(['Vollständige Mail und Anhänge werden beim nächsten Abruf aus dem Postfach geholt.', 'warn']);
-  if (meta.nachholen_fehler) zeilen.push([meta.nachholen_fehler, 'warn']);
-  if ((meta.anhaenge || []).length) {
-    const n = `${meta.anhaenge.length === 1 ? 'Anhang' : 'Anhänge'} ${meta.anhaenge.join(', ')}`;
-    if (!meta.drive) zeilen.push([`${n}: noch nicht in Drive.`, 'warn']);
-    else if (meta.drive === soll) zeilen.push([`${n} in Drive.`, 'gut']);
-    else zeilen.push([`${n}: werden beim nächsten Abruf verschoben.`, 'warn']);
-  }
-  if (!meta.mail_drive && meta.mail_pdf) zeilen.push(['Mail als PDF: kommt beim nächsten Abruf in den Ordner „Second Brain Papierkorb“.', 'warn']);
-  if (meta.mail_drive) {
-    if (!meta.mail_pdf) zeilen.push(['Mail als PDF: wird beim nächsten Abruf in Drive abgelegt.', 'warn']);
-    else if (meta.mail_pdf === soll) zeilen.push(['Mail als PDF in Drive.', 'gut']);
-    else zeilen.push(['Mail als PDF: wird beim nächsten Abruf verschoben.', 'warn']);
-  }
-  return zeilen;
+  if (m.zeile) return `${m.zeile.absender} ${m.zeile.betreff}`;
+  const thema = (m.meta.themen || [])[0];
+  return `${m.meta.absender || ''} ${titelVon(m.text)} ${ablageText(m.meta.ablage)} ${(zustand.themen[thema] || {}).name || ''} ${(m.meta.anhaenge || []).join(' ')}`;
 }
 
 function mailKarte(m) {
-  const karte = document.createElement('div');
-  karte.className = 'karte';
-  const z = m.zeile;
-  const h = document.createElement('h3');
-  h.textContent = z ? (z.betreff || '(ohne Betreff)') : titelVon(m.text);
-  const info = document.createElement('div');
-  info.className = 'hinweis';
-  info.textContent = z ? `${z.datum} · ${z.absender} · ${z.konto}`
-    : `${m.meta.erstellt} · ${absenderAdresse(m) || 'unbekannt'} · ${m.meta.quelle}`;
-  const ort = document.createElement('div');
-  ort.className = 'ort';
-  const art = document.createElement('span');
-  art.className = 'art';
-  const was = document.createElement('span');
-  ort.append(art, was);
-  const zusatz = (text, klasse = 'hinweis') => { const d = document.createElement('span'); d.className = 'hinweis ' + klasse; d.textContent = text; ort.append(d); return d; };
-  if (m.art === 'notiz') {
-    art.textContent = 'Notiz:';
-    was.textContent = ortText(m.meta);
-    zusatz(`Drive-Pfad: ${m.meta.ablage || '–'} · eingeordnet: ${m.meta.eingeordnet_durch || '–'}`);
-    for (const [text, klasse] of driveStand(m.meta)) zusatz(text, klasse);
-    const id = driveZiel(m.meta).split(':')[0];
-    if (id) {
-      const a = document.createElement('a');
-      a.href = `https://drive.google.com/drive/folders/${id}`;
-      a.target = '_blank'; a.rel = 'noopener';
-      a.textContent = 'Themenordner in Drive öffnen';
-      zusatz('').append(a);
-    }
-  } else if (m.art === 'eingang') {
-    art.textContent = 'Im Eingang:';
-    was.textContent = 'wartet auf deine Entscheidung';
-  } else if (m.art === 'verworfen') {
-    art.textContent = 'Verworfen:';
-    was.textContent = z.verworfen;
-  } else {
-    art.textContent = 'Nur im Index:';
-    was.textContent = 'auffindbar, aber keine Notiz' + (z.spam ? ` (Spam-Wert ${Math.round(z.spam * 100)} %)` : '');
+  if (m.art === 'eingang') {
+    const karte = el('div', 'karte');
+    karte.append(el('h3', '', titelVon(m.text)), el('div', 'hinweis', `${m.meta.erstellt} · ${absenderAdresse(m) || 'unbekannt'} · ${m.meta.quelle}`));
+    const ort = el('div', 'ziel');
+    ort.append(el('div', 'ziel-kopf', 'Offen'), el('div', 'pfad', 'wartet auf deine Entscheidung'));
+    karte.append(ort, knopf('Jetzt entscheiden', () => { $('#such-feld').value = ''; zeigeReiter('start'); }, 'leise klein'));
+    return karte;
   }
-  karte.append(h, info, ort);
-
-  const fehler = document.createElement('p');
-  fehler.className = 'fehler';
-  const knoepfe = document.createElement('div');
-  if (m.art === 'eingang') knoepfe.append(knopf('Im Eingang ansehen', () => zeigeReiter('eingang'), 'klein leise'));
-  else if (m.art === 'notiz') knoepfe.append(knopf('Ablage ändern', () => mailFormular(m, karte, knoepfe, fehler), 'klein'));
-  else if (z.message_id) knoepfe.append(knopf('Als Notiz ablegen', () => mailFormular(m, karte, knoepfe, fehler), 'klein'));
-  else zusatz('Ohne Message-ID, kann nicht aus dem Postfach geholt werden.');
-  const details = document.createElement('details');
-  const summary = document.createElement('summary');
-  summary.textContent = 'Mail anzeigen';
-  const pre = document.createElement('pre');
-  pre.textContent = z ? z.kurz : m.text.replace(/^# .*\n+/, '');
-  details.append(summary, pre);
-  karte.append(knoepfe, fehler, details);
-  return karte;
+  return entscheidungKarte(m, m.art === 'notiz' ? 'notiz' : 'index', () => zeigeMails());
 }
 
-function mailFormular(m, karte, knoepfe, fehler) {
-  knoepfe.hidden = true;
-  const form = document.createElement('div');
-  form.className = 'mail-form';
-  const z = m.zeile;
-  const vorgabe = z ? {} : { thema: (m.meta.themen || [])[0], unterordner: unterordnerAusAblage(m.meta.ablage, (m.meta.themen || [])[0]), personen: m.meta.personen, ...notizBezuege(m.meta) };
-  const felder = auswahlFelder(vorgabe, z ? { absender: z.absender, betreff: z.betreff, text: z.kurz }
-    : mailKontext(m, m.meta.vorschlag));
-  const liegt = !!(m.meta && m.meta.mail_pdf);
-  const haken = pdfHaken(!!(m.meta && m.meta.mail_drive),
-    liegt ? 'Mail als PDF in Drive (Haken weg: PDF kommt in den Ordner „Second Brain Papierkorb“)' : undefined);
-  const hinweis = document.createElement('p');
-  hinweis.className = 'hinweis';
-  hinweis.textContent = z ? 'Der nächste Abruf holt die vollständige Mail mit Anhängen aus dem Postfach. Er wird gleich gestartet.'
-    : 'Liegen Anhänge oder das Mail-PDF schon in Drive, verschiebt der nächste Abruf sie in den neuen Ordner.';
-  const speichern = knopf('Speichern', async () => {
-    fehler.textContent = '';
-    const w = { ...felder.wert(), mail_drive: haken.an() };
-    const f = auswahlPruefen(w);
-    if (f) { fehler.textContent = f; return; }
-    speichern.disabled = true;
-    try {
-      const nachAbruf = z ? true : (w.mail_drive !== !!m.meta.mail_drive) || (m.meta.drive || m.meta.mail_pdf);
-      const wie = w.mail_drive && !m.meta.mail_drive ? 'korrigiert, Mail als PDF für Drive vorgemerkt'
-        : !w.mail_drive && m.meta.mail_drive ? 'korrigiert, Mail-PDF abgewählt' : 'korrigiert';
-      if (z) await indexAblegen(m, w);
-      else await eingangAblegen(m, w, 'manuell', wie);
-      if (nachAbruf) await abrufStarten();
-      await zeigeMails();
-    } catch (err) { fehler.textContent = err.message; speichern.disabled = false; }
-  }, '');
-  const abbrechen = knopf('Abbrechen', () => { form.remove(); knoepfe.hidden = false; }, 'leise');
-  const v = !z && m.meta.vorschlag;
-  if (v && v.thema) {
-    const wahl = document.createElement('div');
-    wahl.className = 'hinweis';
-    wahl.append('Vorschläge: ');
-    for (const a of [v, ...(v.alternativen || [])]) {
-      wahl.append(knopf(`${ordnerName(a)} (${Math.round((a.konfidenz || 0) * 100)} %)`, () => felder.setzen(a), 'klein leise'));
-    }
-    form.append(wahl);
-  }
-  form.append(felder, haken, hinweis, speichern, abbrechen);
-  if (!z) form.append(anfordernZeile(m));
-  karte.insertBefore(form, fehler);
-}
 
 // Indexmail -> Notiz mit Kurzinhalt und nachholen: true; Indexzeile entfaellt.
 async function indexAblegen(m, w) {
@@ -1271,7 +1503,7 @@ async function regelAusMail(e, w) {
   const adresse = absenderAdresse(e);
   const domain = adresse.split('@')[1] || adresse;
   const name = domain.split('.').slice(-2, -1)[0] || domain;
-  await zeigeReiter('regeln');
+  await zeigeReiter('einrichtung', 'regeln');
   zustand.regelVonMail = e;
   zustand.regelVonVorschlag = null;
   regelFormular(-1, { name, absender: [domain], thema: w.thema, unterordner: w.unterordner, personen: w.personen,
@@ -1304,9 +1536,15 @@ async function stammdatenLaden() {
   const b = jsyaml.load(bezuege) || {};
   zustand.objekte = b.objekte || {};
   zustand.steuer = b.steuer || {};
-  zustand.themen = jsyaml.load(themen.text).themen || {};
+  const t = jsyaml.load(themen.text) || {};
+  zustand.themen = t.themen || {};
+  zustand.jahre = t.jahre || {};
+  zustand.dauerhaft = t.dauerhaft || null;
   zustand.personen = jsyaml.load(personen.text).personen || {};
-  zustand.ordner = (jsyaml.load(ordner) || {}).ordner || {};
+  const o = jsyaml.load(ordner) || {};
+  zustand.ordner = o.ordner || {};
+  zustand.ordnerIds = o.ids || {};
+  zustand.dauerhaftOrdner = o.dauerhaft || {};
   zustand.wissen = (jsyaml.load(wissen) || {}).eintraege || [];
 }
 
@@ -1325,8 +1563,8 @@ async function zeigeRegeln() {
     zelle(z, (r.absender || []).join(', '));
     zelle(z, (r.empfaenger || []).join(', '));
     zelle(z, (r.betreff || []).join(', '));
-    zelle(z, (zustand.themen[r.thema] || {}).name || r.thema);
-    zelle(z, (r.personen || zustand.regeln.standard_personen || []).join(', '));
+    zelle(z, pfadText('', r.thema, r.unterordner));
+    zelle(z, (r.personen || zustand.regeln.standard_personen || []).map((k) => (zustand.personen[k] || {}).name || k).join(', '));
     const td = z.insertCell();
     td.append(knopf('Ändern', () => regelFormular(i)), knopf('Löschen', () => regelLoeschen(i), 'klein leise'));
   });
@@ -1344,7 +1582,7 @@ async function zeigeVorschlaege() {
   for (const v of daten.vorschlaege) {
     const z = tbody.insertRow();
     zelle(z, v.absender.join(', '));
-    zelle(z, (zustand.themen[v.thema] || {}).name || v.thema);
+    zelle(z, pfadText('', v.thema, ''));
     zelle(z, v.unterordner || '');
     zelle(z, v.grund, 'hinweis');
     z.insertCell().append(
@@ -1405,8 +1643,16 @@ function regelFormular(index, vorlage) {
   zustand.regelBezuege = bezuegeFelder(r);
   bz.append(zustand.regelBezuege);
   $('#regel-fehler').textContent = '';
+  regelPfadZeigen();
   f.hidden = false;
   f.scrollIntoView({ behavior: 'smooth' });
+}
+
+function regelPfadZeigen() {
+  const f = $('#regel-form');
+  const jahr = new Date().getFullYear();
+  $('#regel-pfad').textContent = f.thema.value
+    ? `Kommt nach: ${pfadText(jahr, f.thema.value, unterordnerEinsetzen(f.unterordner.value, `${jahr}-01-01`))} (Jahresordner nach Zugehörigkeit)` : '';
 }
 
 const liste = (text) => text.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
@@ -1537,6 +1783,269 @@ async function mailStarten() {
   } catch (e) { melde(e.message, 'fehler'); }
 }
 
+// --- Einrichtung -------------------------------------------------------------
+// Alles, was man selten braucht, hinter dem Zahnrad. Die Einstellungsdateien
+// gibt es als Formulare; den Rohtext nur noch unter "Für Fortgeschrittene".
+
+const VERTRAG_DATEI = 'config/vertraege.yaml';
+const PERSONEN_DATEI = 'config/personen.yaml';
+
+function zeigeTeil(name) {
+  document.querySelectorAll('#einrichtung .teil').forEach((t) => { t.hidden = t.id !== 'teil-' + name; });
+  document.querySelectorAll('#unterreiter button').forEach((b) => b.classList.toggle('aktiv', b.dataset.teil === name));
+  merke('sb-teil', name);
+  return ({
+    regeln: zeigeRegeln,
+    vertraege: zeigeVertraege,
+    ordner: zeigeOrdner,
+    personen: zeigePersonen,
+    zugang: () => { driveCodeZeigen(); kontenZeigen(); return zeigeSecrets(); },
+    ablaeufe: () => { zeigeLaeufe(); return zeigeAbrufe(); },
+    dateien: zeigeDatei,
+  })[name]();
+}
+
+// Datei mit Kopfkommentar neu schreiben: Kommentar bis zum ersten Schluessel behalten
+function mitKopf(alt, daten, schluessel) {
+  const i = alt.search(new RegExp(`^${schluessel}:`, 'm'));
+  return (i > 0 ? alt.slice(0, i) : '') + jsyaml.dump(daten, { lineWidth: -1, flowLevel: 3 });
+}
+
+async function regelnLaden() {
+  if (!zustand.regeln) {
+    const d = await dateiLesen(REGEL_DATEI);
+    zustand.regeln = JSON.parse(d.text);
+    zustand.regelSha = d.sha;
+  }
+}
+
+// Vertraege
+
+async function zeigeVertraege() {
+  const liste = $('#vertrag-liste');
+  liste.textContent = 'Lade …';
+  try { await stammdatenLaden(); await regelnLaden(); } catch (e) { melde(e.message, 'fehler'); return; }
+  liste.textContent = '';
+  zustand.vertraege.forEach((v, i) => {
+    const k = el('div', 'karte zeile');
+    const text = el('div');
+    text.append(el('strong', '', `${v.nummer}`), ` ${v.name || ''}`, el('div', 'hinweis', `→ ${pfadText('', v.thema, v.unterordner)}`));
+    k.append(text, knopf('Ändern', () => vertragFormular(i), 'klein leise'), knopf('Löschen', () => vertragLoeschen(i), 'klein leise'));
+    liste.append(k);
+  });
+  if (!zustand.vertraege.length) liste.append(el('p', 'hinweis', 'Noch keine Verträge.'));
+  $('#vertrag-form').hidden = true;
+}
+
+function vertragFormular(index) {
+  const f = $('#vertrag-form');
+  const v = index >= 0 ? zustand.vertraege[index] : {};
+  zustand.vertragIndex = index;
+  $('#vertrag-form-titel').textContent = index >= 0 ? 'Vertrag ändern' : 'Neuer Vertrag';
+  f.nummer.value = v.nummer || '';
+  f.name.value = v.name || '';
+  f.auch.value = (v.auch || []).join(', ');
+  const box = $('#vertrag-ordner');
+  box.textContent = '';
+  zustand.vertragFelder = auswahlFelder({ thema: v.thema, unterordner: v.unterordner || '', personen: v.personen,
+    weitere_themen: v.weitere_themen, objekte: v.objekte, steuer: v.steuer }, { betreff: v.name || '', text: String(v.nummer || '') });
+  box.append(zustand.vertragFelder);
+  $('#vertrag-fehler').textContent = '';
+  f.hidden = false;
+  f.scrollIntoView({ behavior: 'smooth' });
+}
+
+async function vertragSpeichern(ev) {
+  ev.preventDefault();
+  const f = $('#vertrag-form');
+  const w = zustand.vertragFelder.wert();
+  const v = { nummer: f.nummer.value.trim(), name: f.name.value.trim(), thema: w.thema };
+  if (!v.nummer || v.nummer.replace(/[^0-9a-z]/gi, '').length < 5) { $('#vertrag-fehler').textContent = 'Die Nummer braucht mindestens 5 Ziffern oder Buchstaben.'; return; }
+  if (!(w.thema in zustand.themen)) { $('#vertrag-fehler').textContent = 'Bitte einen Ordner wählen.'; return; }
+  if (w.unterordner.trim()) v.unterordner = w.unterordner.trim();
+  const auch = f.auch.value.split(',').map((x) => x.trim()).filter(Boolean);
+  if (auch.length) v.auch = auch;
+  if (w.personen.length && JSON.stringify(w.personen) !== JSON.stringify(zustand.regeln.standard_personen || [])) v.personen = w.personen;
+  for (const feld of ['weitere_themen', 'objekte', 'steuer']) {
+    const x = (w[feld] || []).filter((t) => t !== w.thema);
+    if (x.length) v[feld] = x;
+  }
+  try {
+    await commitMehrere(async () => {
+      const alt = await dateiOderLeer(VERTRAG_DATEI);
+      const liste = (jsyaml.load(alt) || {}).vertraege || [];
+      const i = zustand.vertragIndex;
+      if (i >= 0 && liste[i] && String(liste[i].nummer) === String(zustand.vertraege[i].nummer)) liste[i] = v; else liste.push(v);
+      return [{ pfad: VERTRAG_DATEI, text: mitKopf(alt, { vertraege: liste }, 'vertraege') }, ...await ordnerMerken(w.thema, w.unterordner)];
+    }, `vertraege: ${v.nummer} ${zustand.vertragIndex >= 0 ? 'geändert' : 'neu'} (Web)`);
+    melde(`Vertrag ${v.nummer} gespeichert.`, 'gut');
+    await zeigeVertraege();
+  } catch (e) { $('#vertrag-fehler').textContent = e.message; }
+}
+
+async function vertragLoeschen(index) {
+  const v = zustand.vertraege[index];
+  if (!confirm(`Vertrag ${v.nummer} löschen? Die Ablage in Drive bleibt, nur die Erkennung entfällt.`)) return;
+  try {
+    await commitMehrere(async () => {
+      const alt = await dateiOderLeer(VERTRAG_DATEI);
+      const liste = ((jsyaml.load(alt) || {}).vertraege || []).filter((x) => String(x.nummer) !== String(v.nummer));
+      return [{ pfad: VERTRAG_DATEI, text: mitKopf(alt, { vertraege: liste }, 'vertraege') }];
+    }, `vertraege: ${v.nummer} gelöscht (Web)`);
+    melde(`Vertrag ${v.nummer} gelöscht.`, 'gut');
+    await zeigeVertraege();
+  } catch (e) { melde(e.message, 'fehler'); }
+}
+
+// Ordner
+
+async function zeigeOrdner() {
+  const baum = $('#ordner-baum');
+  baum.textContent = 'Lade …';
+  try { await stammdatenLaden(); } catch (e) { melde(e.message, 'fehler'); return; }
+  const wahl = $('#ordner-form').thema;
+  const vorher = wahl.value;
+  wahl.textContent = '';
+  for (const [k, t] of Object.entries(zustand.themen)) wahl.add(new Option(t.ablage || t.name || k, k, false, k === vorher));
+  baum.textContent = '';
+  const jahr = new Date().getFullYear();
+  for (const [k, t] of Object.entries(zustand.themen)) {
+    const liste = (zustand.ordner[k] || []).map(String);
+    const d = el('details', 'themenordner');
+    const s = el('summary');
+    const href = ordnerLink(jahr, k, '');
+    s.append(el('strong', '', t.ablage || k), el('span', 'hinweis', ` ${t.name || ''} · ${liste.length} Unterordner`));
+    d.append(s);
+    if (href) d.append(link('Themenordner in Drive öffnen', href, 'drive-link'));
+    const ul = el('ul', 'ordnerbaum');
+    for (const uo of liste) {
+      const li = el('li');
+      li.style.paddingLeft = `${(uo.split('/').length - 1) * 16}px`;
+      const h = ordnerLink(jahr, k, uo);
+      li.append(h && zustand.ordnerIds[`${k}/${uo}`] ? link(uo.split('/').pop(), h) : el('span', '', uo.split('/').pop()),
+        knopf('Entfernen', () => ordnerEntfernen(k, uo), 'klein leise'));
+      ul.append(li);
+    }
+    d.append(ul);
+    baum.append(d);
+  }
+  const dname = (zustand.dauerhaft && zustand.dauerhaft.name) || '0000-dauerhaft';
+  const d = el('details', 'themenordner');
+  d.append(el('summary', '', dname));
+  if (zustand.dauerhaft) d.append(link(`${dname} in Drive öffnen`, `https://drive.google.com/drive/folders/${zustand.dauerhaft.id}`, 'drive-link'));
+  const ul = el('ul', 'ordnerbaum');
+  for (const [n, id] of Object.entries(zustand.dauerhaftOrdner || {})) {
+    const li = el('li');
+    li.append(id ? link(n, `https://drive.google.com/drive/folders/${id}`) : el('span', '', `${n} (neu)`));
+    ul.append(li);
+  }
+  d.append(ul);
+  baum.append(d);
+}
+
+async function ordnerEintragen(ev) {
+  ev.preventDefault();
+  const f = $('#ordner-form');
+  const uo = f.pfad.value.trim().replace(/^\/+|\/+$/g, '');
+  $('#ordner-fehler').textContent = '';
+  if (!uo || !unterordnerGueltig(uo)) { $('#ordner-fehler').textContent = 'Bitte einen gültigen Unterordner eingeben (Ebenen mit /).'; return; }
+  try {
+    await commitMehrere(async () => ordnerMerken(f.thema.value, uo), `ordner: ${f.thema.value}/${uo} eingetragen (Web)`);
+    melde(`${pfadText('', f.thema.value, uo)} eingetragen.`, 'gut');
+    f.pfad.value = '';
+    await zeigeOrdner();
+  } catch (e) { $('#ordner-fehler').textContent = e.message; }
+}
+
+async function ordnerEntfernen(thema, uo) {
+  if (!confirm(`${pfadText('', thema, uo)} aus der Auswahl entfernen? In Drive bleibt der Ordner, wie er ist.`)) return;
+  try {
+    await commitMehrere(async () => {
+      const alt = await dateiOderLeer(ORDNER_DATEI);
+      const daten = jsyaml.load(alt) || {};
+      daten.ordner[thema] = (daten.ordner[thema] || []).map(String).filter((x) => x !== uo);
+      if (daten.ids) delete daten.ids[`${thema}/${uo}`];
+      return [{ pfad: ORDNER_DATEI, text: ordnerDateiText(alt, daten) }];
+    }, `ordner: ${thema}/${uo} entfernt (Web)`);
+    await zeigeOrdner();
+  } catch (e) { melde(e.message, 'fehler'); }
+}
+
+// Personen
+
+async function zeigePersonen() {
+  const liste = $('#personen-liste');
+  liste.textContent = 'Lade …';
+  try { await stammdatenLaden(); await regelnLaden(); } catch (e) { melde(e.message, 'fehler'); return; }
+  liste.textContent = '';
+  for (const [k, p] of Object.entries(zustand.personen)) {
+    const z = el('div', 'karte zeile');
+    const name = document.createElement('input');
+    name.value = p.name || k;
+    z.append(name, knopf('Umbenennen', () => personSpeichern(k, name.value), 'klein leise'),
+      knopf('Entfernen', () => personEntfernen(k), 'klein leise'));
+    liste.append(z);
+  }
+  const std = $('#standard-personen');
+  std.textContent = '';
+  const h = haekchen('Vorausgewählt', zustand.personen, zustand.regeln.standard_personen || []);
+  h.addEventListener('change', async () => {
+    try {
+      await regelnLaden();
+      zustand.regeln.standard_personen = h.werte();
+      await regelnSpeichern('regeln: vorausgewählte Personen geändert (Web)');
+      await zeigeTeil('personen');
+    } catch (e) { $('#personen-fehler').textContent = e.message; }
+  });
+  std.append(h);
+}
+
+async function personenSchreiben(aendern, nachricht) {
+  await commitMehrere(async () => {
+    const alt = await dateiOderLeer(PERSONEN_DATEI);
+    const daten = jsyaml.load(alt) || {};
+    daten.personen = daten.personen || {};
+    aendern(daten.personen);
+    return [{ pfad: PERSONEN_DATEI, text: mitKopf(alt, { personen: daten.personen }, 'personen') }];
+  }, nachricht);
+  await zeigePersonen();
+}
+
+async function personSpeichern(k, name) {
+  name = name.trim();
+  if (!name) return;
+  try { await personenSchreiben((p) => { p[k] = { ...(p[k] || {}), name }; }, `personen: ${k} heißt ${name} (Web)`); melde('Gespeichert.', 'gut'); } catch (e) { $('#personen-fehler').textContent = e.message; }
+}
+
+async function personNeu(ev) {
+  ev.preventDefault();
+  const name = $('#person-form').name.value.trim();
+  const k = slug(name, 20);
+  if (!name) return;
+  if (k in zustand.personen) { $('#personen-fehler').textContent = 'Die Person gibt es schon.'; return; }
+  try { await personenSchreiben((p) => { p[k] = { name }; }, `personen: ${name} neu (Web)`); $('#person-form').name.value = ''; } catch (e) { $('#personen-fehler').textContent = e.message; }
+}
+
+async function personEntfernen(k) {
+  if (!confirm(`${(zustand.personen[k] || {}).name || k} entfernen? Bereits abgelegte Mails behalten die Zuordnung.`)) return;
+  try { await personenSchreiben((p) => { delete p[k]; }, `personen: ${k} entfernt (Web)`); } catch (e) { $('#personen-fehler').textContent = e.message; }
+}
+
+// Abrufe: was die letzten Abrufe gebracht haben
+async function zeigeAbrufe() {
+  const tbody = $('#lauf-liste');
+  tbody.textContent = '';
+  let laeufe = [];
+  try { laeufe = await laeufeLaden(); } catch (e) { melde(e.message, 'fehler'); return; }
+  for (const l of laeufe.slice(0, 15)) {
+    const z = tbody.insertRow();
+    zelle(z, new Date(l.zeit).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' }));
+    zelle(z, l.konto);
+    zelle(z, `${l.notiz} abgelegt, ${l.offen} offen, ${l.index} nur gemerkt, ${l.verwerfen} aussortiert`);
+  }
+  if (!laeufe.length) zelle(tbody.insertRow(), 'Noch keine Abrufe mit neuen Mails.', 'hinweis');
+}
+
 // Anmeldung
 
 async function anmelden(e) {
@@ -1564,11 +2073,21 @@ function starten() {
   $('#reiter').hidden = false;
   $('#abmelden').hidden = false;
   $('#repo-name').textContent = zustand.repo;
-  zeigeReiter(lade('sb-reiter') || 'uebersicht');
+  zeigeReiter(lade('sb-reiter') || 'start');
 }
 
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('#reiter button').forEach((b) => b.addEventListener('click', () => zeigeReiter(b.dataset.reiter)));
+  document.querySelectorAll('#unterreiter button').forEach((b) => b.addEventListener('click', () => zeigeTeil(b.dataset.teil)));
+  let suchTimer = null;
+  $('#such-feld').addEventListener('input', () => { clearTimeout(suchTimer); suchTimer = setTimeout(suchen, 250); });
+  $('#vertrag-neu').addEventListener('click', async () => { await stammdatenLaden(); await regelnLaden(); vertragFormular(-1); });
+  $('#vertrag-abbrechen').addEventListener('click', () => { $('#vertrag-form').hidden = true; });
+  $('#vertrag-form').addEventListener('submit', vertragSpeichern);
+  $('#ordner-form').addEventListener('submit', ordnerEintragen);
+  $('#person-form').addEventListener('submit', personNeu);
+  $('#regel-form').thema.addEventListener('change', regelPfadZeigen);
+  $('#regel-form').unterordner.addEventListener('input', regelPfadZeigen);
   $('#anmeldung-form').addEventListener('submit', anmelden);
   $('#abmelden').addEventListener('click', abmelden);
   $('#secret-neu-form').addEventListener('submit', weiteresSecretSpeichern);

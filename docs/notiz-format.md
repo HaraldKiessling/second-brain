@@ -41,9 +41,13 @@ Verknüpft: [[IONOS]]
 | `anhaenge`, `drive` | nein | Dateinamen der Anhänge und ihr Ort in Drive (`<ordner-id>:<pfad>`) |
 | `mail_drive`, `mail_pdf` | nein | Mail soll als PDF in den Drive-Ordner (Web-App, Regel, gelernt oder KI-Vorschlag); `mail_pdf` ist ihr Ort, sobald sie dort liegt; ohne `mail_drive` kommt ein vorhandenes PDF in den Ordner „Second Brain Papierkorb“ des Agentenkontos. Das PDF druckt Chrome im Ablauf, die Drive-Brücke braucht dafür keine neue Version |
 | `ohne_anhang` | nein | Mail ohne Dokument, trotzdem abgelegt; daraus lernt das Einordnen, dass dieser Absender wichtig ist |
+| `jahr`, `jahr_grund` | nein | **Zugehörigkeitsjahr**, wenn es vom Jahr in `erstellt` abweicht, und woran es erkannt wurde (z. B. „Zahlung am 01.01.2027“); bestimmt den Jahresordner in `ablage` (ADR 0003) |
+| `dateien`, `mail_pdf_id` | nein | Drive-IDs der hochgeladenen Anhänge (Name → ID) und des Mail-PDFs, für Links in Web-App und Notiztext |
+| `dauerhaft_vorschlag` | nein | Grund, warum der Inhalt vermutlich viele Jahre betrifft (Vorschlag für 0000-dauerhaft) |
+| `dauerhaft`, `drive_dauerhaft`, `dauerhaft_nein` | nein | von Harald bestätigt: Unterordner in 0000-dauerhaft für eine Kopie; ihr Ort, sobald sie dort liegt; oder abgelehnt |
 | `nachholen` | nein | in der Web-App aus dem Index abgelegt; der nächste Abruf holt vollständigen Text und Anhänge (`second-brain nachholen`), sonst `nachholen_fehler` |
 
-Die `ablage` darf mehrstufig sein (`0-2026/31 Harald/ionos/rechnungen`). In Regeln und Vorschlägen werden `{jahr}` und `{monat}` im Unterordner durch das Datum der Mail ersetzt.
+Die `ablage` darf mehrstufig sein (`0-2026/31 Harald/ionos/rechnungen`). Der erste Teil ist der Jahresordner; „0-2026“ und „2026“ meinen denselben Ordner (Jahreswechsel). Nach dem ersten Drive-Abgleich bekommt der Notiztext einen Abschnitt „Ablage in Drive“ mit Links auf Ordner und Dateien (zwischen `<!-- ablage -->` und `<!-- /ablage -->`, wird bei jeder Änderung neu geschrieben). In Regeln und Vorschlägen werden `{jahr}` und `{monat}` im Unterordner durch das Datum der Mail ersetzt.
 
 Ein **Eingang** unter `eingang/` hat dasselbe Format mit leeren `personen` und `themen`, dazu `offen_grund` und, falls vorhanden, `vorschlag` (`thema`, `unterordner`, `personen`, `konfidenz`, `durch`, `grund`).
 

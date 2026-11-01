@@ -170,3 +170,86 @@ def test_aeltere_notizen_werden_aus_dem_artefakt_nachgetragen(repo, tmp_path):
     assert drive.abgleichen(repo, f.bruecke, str(tmp_path / 'anh'), nachtragen=True) == (1, 0)
     assert [a['name'] for a in f.aufrufe] == ['2026-10-28 rechnung.pdf']
     assert notiz(repo, 'notizen', '2026', 'edv', nid + '.md').meta['anhaenge'] == ['rechnung.pdf']
+
+
+def themen_von(repo):
+    return yaml.safe_load(open(os.path.join(repo, 'config', 'themen.yaml'), encoding='utf-8'))['themen']
+
+
+def test_jahresordner_heisst_nach_dem_jahreswechsel_ohne_0():
+    themen = {'edv': {'ablage': '31 EDV', 'drive': {'0-2026': EDV}}}
+    assert drive.ziel({'id': 'x', 'themen': ['edv'], 'ablage': '2026/31 EDV/a'}, themen) == EDV + ':a'
+
+
+def test_thema_ohne_id_im_jahr_wird_im_jahresordner_angelegt():
+    themen = {'edv': {'ablage': '31 EDV', 'drive': {'0-2026': EDV}}}
+    meta = {'id': 'x', 'themen': ['edv'], 'ablage': '2024/31 EDV/hoster'}
+    assert drive.ziel(meta, themen, {'2024': 'J2024'}) == 'J2024:31 EDV/hoster'
+    assert drive.ziel(meta, themen) == ':Second Brain Eingang/x'
+
+
+def test_zugehoerigkeitsjahr_bestimmt_den_jahresordner(repo, tmp_path):
+    f = Fake()
+    abruf(repo, tmp_path / 'anh', roh('Hoster <billing@hoster-beispiel.de>', 'Rechnung 2027',
+                                      text='Der Betrag ist fällig am 02.01.2027.', anhang='r.pdf'))
+    n = notiz(repo, 'notizen', '2026', 'edv', '2026-10-28-hoster-rechnung-2027.md')
+    assert n.meta['ablage'].startswith('2027/') and n.meta['jahr'] == 2027
+    assert n.meta['jahr_grund'] == 'Zahlung am 02.01.2027'
+
+
+def test_ids_und_links_im_notiztext(repo, tmp_path):
+    f = Fake()
+    oy = os.path.join(repo, 'config', 'ordner.yaml')
+    with open(oy, 'w', encoding='utf-8') as fh:
+        yaml.safe_dump({'ordner': {'edv': ['hoster']}, 'ids': {'edv/hoster': 'ORDNER_HOSTER'}}, fh)
+    abruf(repo, tmp_path / 'anh', roh('Hoster <billing@hoster-beispiel.de>', 'Rechnung November',
+                                      anhang='rechnung.pdf'))
+    drive.abgleichen(repo, f.bruecke, str(tmp_path / 'anh'))
+    n = notiz(repo, 'notizen', '2026', 'edv', '2026-10-28-hoster-rechnung-november.md')
+    assert n.meta['dateien'] == {'rechnung.pdf': 'f1'}
+    assert 'Ordner: [2026 › 31 EDV › hoster](https://drive.google.com/drive/folders/ORDNER_HOSTER)' in n.text
+    assert '- Anhang [rechnung.pdf](https://drive.google.com/file/d/f1/view)' in n.text
+    # zweiter Lauf aendert nichts, der Block steht genau einmal da
+    drive.abgleichen(repo, f.bruecke, str(tmp_path / 'anh'))
+    n2 = notiz(repo, 'notizen', '2026', 'edv', '2026-10-28-hoster-rechnung-november.md')
+    assert n2.text == n.text and n2.text.count('## Ablage in Drive') == 1
+
+
+def test_kopie_nach_0000_dauerhaft_und_wieder_weg(repo, tmp_path):
+    f = Fake()
+    pfad = os.path.join(repo, 'config', 'themen.yaml')
+    t = yaml.safe_load(open(pfad, encoding='utf-8'))
+    t['dauerhaft'] = {'name': '0000-dauerhaft', 'id': 'DAUER'}
+    with open(pfad, 'w', encoding='utf-8') as fh:
+        yaml.safe_dump(t, fh, allow_unicode=True)
+    abruf(repo, tmp_path / 'anh', roh('Hoster <billing@hoster-beispiel.de>', 'Ihr Versicherungsschein',
+                                      anhang='schein.pdf'))
+    nid = '2026-10-28-hoster-ihr-versicherungsschein'
+    datei = os.path.join(repo, 'notizen', '2026', 'edv', nid + '.md')
+    n = notiz(repo, 'notizen', '2026', 'edv', nid + '.md')
+    assert n.meta['dauerhaft_vorschlag'] == 'Versicherungsschein'
+    # Harald bestaetigt in der Web-App
+    n.meta['dauerhaft'] = '03 Kieler 37'
+    with open(datei, 'w', encoding='utf-8') as fh:
+        fh.write(nz.schreiben(n))
+    drive.abgleichen(repo, f.bruecke, str(tmp_path / 'anh'))
+    assert [(a['aktion'], a['ordner_id'], a['pfad']) for a in f.aufrufe] == [
+        ('hochladen', EDV, 'hoster'), ('hochladen', 'DAUER', '03 Kieler 37')]
+    n = notiz(repo, 'notizen', '2026', 'edv', nid + '.md')
+    assert n.meta['drive_dauerhaft'] == 'DAUER:03 Kieler 37'
+    assert 'Kopie: [0000-dauerhaft › 03 Kieler 37](https://drive.google.com/drive/folders/DAUER)' in n.text
+    # abgewaehlt: Kopie in den Papierkorb
+    del n.meta['dauerhaft']
+    with open(datei, 'w', encoding='utf-8') as fh:
+        fh.write(nz.schreiben(n))
+    f.aufrufe.clear()
+    drive.abgleichen(repo, f.bruecke)
+    assert [(a['aktion'], a['von_id'], a['pfad']) for a in f.aufrufe] == [
+        ('verschieben', 'DAUER', 'Second Brain Papierkorb')]
+    assert 'drive_dauerhaft' not in notiz(repo, 'notizen', '2026', 'edv', nid + '.md').meta
+
+
+def test_dauerhaft_ohne_lokale_dateien_wird_nachgeholt(repo, tmp_path):
+    meta = {'quelle': 'gmx', 'dauerhaft': 'Immobilien', 'anhaenge': ['a.pdf']}
+    assert mail._dauerhaft_offen(meta)
+    assert not mail._dauerhaft_offen(dict(meta, drive_dauerhaft='X:Immobilien'))
