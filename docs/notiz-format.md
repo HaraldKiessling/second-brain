@@ -29,10 +29,12 @@ Verknüpft: [[IONOS]]
 | `erstellt` | ja | Datum des Inhalts (nicht des Imports), `JJJJ-MM-TT` |
 | `quelle` | ja | Name der Quelle, z. B. `gmx`, `gmail`, `drive`, `web`, `manuell` |
 | `personen` | ja | Liste von Schlüsseln aus `config/personen.yaml` |
-| `themen` | ja | Liste von Schlüsseln aus `config/themen.yaml` |
+| `themen` | ja | Liste von Schlüsseln aus `config/themen.yaml`; das erste ist das Hauptthema und bestimmt den Drive-Ordner, die weiteren sind Schlagworte |
 | `ablage` | nein | Pfad des Originals in der Drive-Ablage |
 | `original` | nein | Link auf das Original |
-| `eingeordnet_durch` | nein | `regel/<name>`, `heuristik/<art>`, `ki/<modell>` oder `manuell` |
+| `eingeordnet_durch` | nein | `regel/<name>`, `vertrag/<nummer>`, `heuristik/<art>`, `ki/<modell>` oder `manuell` |
+| `objekte` | nein | Liste von Schlüsseln aus `config/bezuege.yaml` (`objekte`), worauf sich der Inhalt bezieht, z. B. `kieler37`, `auto` |
+| `steuer` | nein | Liste von Schlüsseln aus `config/bezuege.yaml` (`steuer`), für welche Steuerangabe er zählt, z. B. `vermietung`, `vorsorge` |
 | `konfidenz` | nein | Konfidenz der Einordnung, nur wenn kleiner als 1 |
 | `absender` | nein | Mail-Adresse des Absenders; daraus lernt die Heuristik |
 | `umsaetze` | nein | Verweise auf verknüpfte Umsätze, `<konto>/<datum>/<nr>` |
@@ -58,3 +60,5 @@ Regeln für Mails liegen im Daten-Repo unter `regeln/mail.json`. Ablauf und Must
 ```
 second-brain einordnen <daten-repo> "IONOS <rechnung@ionos.de>" "Ihre Rechnung" --anhang rechnung.pdf
 ```
+
+Nur im Eingang bzw. bis zum nächsten Abruf: `vorschlag` (Vorschlag mit `alternativen`, optional `weitere_themen`, `objekte`, `steuer`), `vorschlag_anfordern` (Web-App „Neue Vorschläge“: `true` oder Haralds Hinweis an die KI; der Abruf ersetzt es durch einen neuen `vorschlag`) und `vorschlag_fehler`.

@@ -15,7 +15,7 @@ const MAIL_WORKFLOW = 'mail.yml';
 const ORDNER_DATEI = 'config/ordner.yaml';
 
 const $ = (sel) => document.querySelector(sel);
-const zustand = { repo: '', token: '', themen: {}, personen: {}, regeln: null, regelSha: '', bearbeitet: -1, regelVonMail: null, regelVonVorschlag: null, ordner: {}, wissen: [] };
+const zustand = { repo: '', token: '', themen: {}, personen: {}, regeln: null, regelSha: '', bearbeitet: -1, regelVonMail: null, regelVonVorschlag: null, ordner: {}, wissen: [], objekte: {}, steuer: {}, vertraege: [] };
 
 // --- Speicher (localStorage kann fehlen, z. B. im privaten Modus) ----------
 
@@ -456,9 +456,16 @@ function bekannteOrdner() {
   for (const t of Object.keys(zustand.themen)) dazu(t, '', 'Themenordner');
   for (const [t, liste] of Object.entries(zustand.ordner || {})) for (const uo of liste || []) dazu(t, String(uo), 'Ordnerliste');
   for (const w of zustand.wissen || []) if (w.unterordner) dazu(w.thema, String(w.unterordner), 'Ablagewissen');
+  for (const v of zustand.vertraege || []) dazu(v.thema, String(v.unterordner || ''), 'Vertrag');
   for (const r of (zustand.regeln && zustand.regeln.regeln) || []) if (r.unterordner) dazu(r.thema, r.unterordner, 'Regel');
   return alle;
 }
+
+// Ziffernfolgen ab 6 Stellen ohne Trennzeichen (624/220429-P -> 624220429), wie nummern() in einordnen.py
+function nummern(text) {
+  return new Set((String(text || '').match(/\d(?:[\s/._-]*\d)+/g) || []).map((z) => z.replace(/\D/g, '')).filter((z) => z.length >= 6));
+}
+const schnitt = (a, b) => [...a].some((x) => b.has(x));
 
 // Woerter fuer den Vergleich: klein, ohne Umlaute, ohne Ziffern.
 function woerter(text) {
@@ -494,6 +501,18 @@ function ordnerRangliste(kontext) {
     const gefunden = (w.muster || []).map(String).filter((m) => roh.includes(m.toLowerCase()));
     if (gefunden.length) gib(w.thema, String(w.unterordner || ''), 1.5 * gefunden.length, gefunden.join(', '));
   }
+  // Vertragsnummern: Vertragsliste und Nummern in Ordnernamen
+  const imBetreff = nummern([kontext.betreff, ...(kontext.anhaenge || [])].join(' '));
+  const ueberall = new Set([...imBetreff, ...nummern(kontext.text)]);
+  for (const v of zustand.vertraege || []) {
+    if (schnitt(nummern(v.nummer), ueberall)) gib(v.thema, String(v.unterordner || ''), 8, `Vertrag ${v.nummer}`);
+  }
+  for (const o of [...alle.values()]) {
+    const eigene = nummern(o.unterordner);
+    if (!eigene.size) continue;
+    if (schnitt(eigene, ueberall)) gib(o.thema, o.unterordner, 6, 'Vertragsnummer passt');
+    else if (imBetreff.size) gib(o.thema, o.unterordner, -6, 'andere Vertragsnummer');
+  }
   // Woerter aus Betreff (doppelt), Anhaengen und Mailtext gegen Ordnernamen
   const kopf = new Set(woerter([kontext.betreff, ...(kontext.anhaenge || [])].join(' ')));
   // Mailtext bis zur Grussformel, der Fuss (Telefon, Impressum) verfaelscht sonst
@@ -521,6 +540,50 @@ function ordnerName(o) {
 
 function ordnerBekannt(thema, uo) {
   return bekannteOrdner().has(ordnerSchluessel(thema, String(uo || '').replace(/^\/+|\/+$/g, '')));
+}
+
+// Haekchen-Gruppe: eintraege { schluessel: { name } }
+function haekchen(legende, eintraege, aktiv = []) {
+  const f = document.createElement('fieldset');
+  const l = document.createElement('legend');
+  l.textContent = legende;
+  f.append(l);
+  for (const [k, e] of Object.entries(eintraege)) {
+    const lab = document.createElement('label');
+    const c = document.createElement('input');
+    c.type = 'checkbox'; c.value = k; c.checked = aktiv.includes(k);
+    lab.append(c, ' ' + ((e && e.name) || k));
+    f.append(lab);
+  }
+  f.werte = () => [...f.querySelectorAll('input:checked')].map((c) => c.value);
+  f.setzen = (liste = []) => f.querySelectorAll('input').forEach((c) => { c.checked = liste.includes(c.value); });
+  return f;
+}
+
+// Weitere Themen, Objekte, Steuerbezuege (aufklappbar). Liefert Element mit werte()/setzen().
+function bezuegeFelder(vorgabe = {}) {
+  const d = document.createElement('details');
+  d.className = 'bezuege';
+  const s = document.createElement('summary');
+  const themen = haekchen('Weitere Themen (auch dort auffindbar)', zustand.themen, vorgabe.weitere_themen || []);
+  const objekte = haekchen('Objekt', zustand.objekte, vorgabe.objekte || []);
+  const steuer = haekchen('Steuerbezug', zustand.steuer, vorgabe.steuer || []);
+  const teile = [themen, ...(Object.keys(zustand.objekte).length ? [objekte] : []), ...(Object.keys(zustand.steuer).length ? [steuer] : [])];
+  const zusammenfassen = () => {
+    const namen = (liste, quelle) => liste.map((k) => ((quelle[k] || {}).name || k).split(' (')[0]);
+    const alle = [...namen(themen.werte(), zustand.themen), ...namen(objekte.werte(), zustand.objekte), ...namen(steuer.werte(), zustand.steuer)];
+    s.textContent = 'Weitere Themen, Objekt, Steuerbezug' + (alle.length ? ': ' + alle.join(', ') : '');
+  };
+  d.append(s, ...teile);
+  d.addEventListener('change', zusammenfassen);
+  d.werte = () => ({ weitere_themen: themen.werte(), objekte: objekte.werte(), steuer: steuer.werte() });
+  d.setzen = (v = {}) => {
+    themen.setzen(v.weitere_themen || []); objekte.setzen(v.objekte || []); steuer.setzen(v.steuer || []);
+    zusammenfassen();
+    if ((v.weitere_themen || []).length || (v.objekte || []).length || (v.steuer || []).length) d.open = true;
+  };
+  d.setzen(vorgabe);
+  return d;
 }
 
 function auswahlFelder(vorgabe, kontext = {}) {
@@ -588,12 +651,14 @@ function auswahlFelder(vorgabe, kontext = {}) {
     l.append(c, ' ' + (p.name || k));
     personen.append(l);
   }
-  box.append(lo, reihe, neu, personen);
+  const bezuege = bezuegeFelder(vorgabe);
+  box.append(lo, reihe, neu, personen, bezuege);
   abgleichen();
   box.wert = () => ({
     thema: thema.value,
     unterordner: uo.value.trim(),
     personen: [...personen.querySelectorAll('input:checked')].map((c) => c.value),
+    ...bezuege.werte(),
   });
   box.setzen = (v) => {
     thema.value = v.thema || '';
@@ -601,8 +666,53 @@ function auswahlFelder(vorgabe, kontext = {}) {
     if (v.personen && v.personen.length) {
       personen.querySelectorAll('input').forEach((c) => { c.checked = v.personen.includes(c.value); });
     }
+    bezuege.setzen(v);
     abgleichen();
   };
+  return box;
+}
+
+const notizBezuege = (meta) => ({ weitere_themen: (meta.themen || []).slice(1), objekte: meta.objekte || [], steuer: meta.steuer || [] });
+
+// Neue Vorschlaege anfordern: Feld vorschlag_anfordern in der Notiz, der Abruf
+// fragt die KI (mit Haralds Hinweis) und schreibt den Vorschlag zurueck.
+async function vorschlaegeAnfordern(pfad, hinweis) {
+  await commitMehrere(async () => {
+    const { text } = await dateiLesen(pfad);
+    const n = notizLesen(text);
+    n.meta.vorschlag_anfordern = hinweis.trim() || true;
+    delete n.meta.vorschlag_fehler;
+    return [{ pfad, text: notizSchreiben(n.meta, n.text) }];
+  }, `vorschlag: ${pfad.split('/').pop().replace(/\.md$/, '')} neue Vorschläge angefordert (Web)`);
+  melde('Neue Vorschläge angefordert.', 'gut');
+  await abrufStarten();
+}
+
+// Zeile "Neue Vorschläge" mit Hinweisfeld; Zustand aus der Notiz.
+function anfordernZeile(e) {
+  const box = document.createElement('div');
+  box.className = 'anfordern';
+  const status = document.createElement('div');
+  status.className = 'hinweis';
+  if (e.meta.vorschlag_anfordern) {
+    status.textContent = 'Neue Vorschläge sind angefordert und kommen mit dem laufenden Abruf (etwa 1–2 Minuten, dann neu laden).';
+  } else if (e.meta.vorschlag_fehler) {
+    status.textContent = 'Letzte Anforderung ohne Ergebnis: ' + e.meta.vorschlag_fehler;
+  }
+  const reihe = document.createElement('div');
+  reihe.className = 'reihe';
+  const hinweis = document.createElement('input');
+  hinweis.placeholder = 'Hinweis für die KI (optional), z. B. neues Auto, Kfz-Versicherung';
+  const l = document.createElement('label'); l.append('Passt nichts? Neue Vorschläge der KI', hinweis);
+  const k = knopf('Neue Vorschläge', async () => {
+    k.disabled = true;
+    try {
+      await vorschlaegeAnfordern(e.pfad, hinweis.value);
+      status.textContent = 'Angefordert. Die neuen Vorschläge erscheinen nach dem Abruf (etwa 1–2 Minuten, dann neu laden).';
+    } catch (err) { status.textContent = err.message; k.disabled = false; }
+  }, 'leise');
+  reihe.append(l);
+  box.append(reihe, k, status);
   return box;
 }
 
@@ -681,7 +791,7 @@ function eingangKarte(e) {
   const pre = document.createElement('pre');
   pre.textContent = e.text.replace(/^# .*\n+/, '');
   details.append(summary, pre);
-  karte.append(felder, knoepfe, fehler, details);
+  karte.append(felder, knoepfe, fehler, anfordernZeile(e), details);
   return karte;
 }
 
@@ -712,7 +822,13 @@ async function eingangAblegen(e, w, durch, wie = 'aus Eingang abgelegt', weitere
   delete meta.vorschlag;
   delete meta.konfidenz;
   const thema = zustand.themen[w.thema] || {};
-  meta.themen = [w.thema];
+  meta.themen = [w.thema, ...(w.weitere_themen || []).filter((t) => t !== w.thema && t in zustand.themen)];
+  for (const feld of ['objekte', 'steuer']) {
+    if ((w[feld] || []).length) meta[feld] = w[feld];
+    else delete meta[feld];
+  }
+  delete meta.vorschlag_fehler;
+  delete meta.vorschlag_anfordern;
   meta.personen = w.personen;
   meta.ablage = [jahrOrdner(datum), thema.ablage, unterordnerEinsetzen(w.unterordner, datum)].filter(Boolean).join('/');
   meta.eingeordnet_durch = durch;
@@ -818,7 +934,7 @@ function autoKarte(a) {
       return;
     }
     const thema = (e.meta.themen || [])[0];
-    const felder = auswahlFelder({ thema, unterordner: unterordnerAusAblage(e.meta.ablage, thema), personen: e.meta.personen }, mailKontext(e));
+    const felder = auswahlFelder({ thema, unterordner: unterordnerAusAblage(e.meta.ablage, thema), personen: e.meta.personen, ...notizBezuege(e.meta) }, mailKontext(e));
     const ablage = document.createElement('div');
     ablage.className = 'hinweis';
     ablage.textContent = 'Jetzt: ' + (e.meta.ablage || '');
@@ -1022,7 +1138,7 @@ function mailFormular(m, karte, knoepfe, fehler) {
   const form = document.createElement('div');
   form.className = 'mail-form';
   const z = m.zeile;
-  const vorgabe = z ? {} : { thema: (m.meta.themen || [])[0], unterordner: unterordnerAusAblage(m.meta.ablage, (m.meta.themen || [])[0]), personen: m.meta.personen };
+  const vorgabe = z ? {} : { thema: (m.meta.themen || [])[0], unterordner: unterordnerAusAblage(m.meta.ablage, (m.meta.themen || [])[0]), personen: m.meta.personen, ...notizBezuege(m.meta) };
   const felder = auswahlFelder(vorgabe, z ? { absender: z.absender, betreff: z.betreff, text: z.kurz }
     : mailKontext(m, m.meta.vorschlag));
   const liegt = !!(m.meta && m.meta.mail_pdf);
@@ -1049,7 +1165,18 @@ function mailFormular(m, karte, knoepfe, fehler) {
     } catch (err) { fehler.textContent = err.message; speichern.disabled = false; }
   }, '');
   const abbrechen = knopf('Abbrechen', () => { form.remove(); knoepfe.hidden = false; }, 'leise');
+  const v = !z && m.meta.vorschlag;
+  if (v && v.thema) {
+    const wahl = document.createElement('div');
+    wahl.className = 'hinweis';
+    wahl.append('Vorschläge: ');
+    for (const a of [v, ...(v.alternativen || [])]) {
+      wahl.append(knopf(`${ordnerName(a)} (${Math.round((a.konfidenz || 0) * 100)} %)`, () => felder.setzen(a), 'klein leise'));
+    }
+    form.append(wahl);
+  }
   form.append(felder, haken, hinweis, speichern, abbrechen);
+  if (!z) form.append(anfordernZeile(m));
   karte.insertBefore(form, fehler);
 }
 
@@ -1108,6 +1235,7 @@ async function regelAusMail(e, w) {
   zustand.regelVonMail = e;
   zustand.regelVonVorschlag = null;
   regelFormular(-1, { name, absender: [domain], thema: w.thema, unterordner: w.unterordner, personen: w.personen,
+    weitere_themen: w.weitere_themen, objekte: w.objekte, steuer: w.steuer,
     ...(e.meta.ohne_anhang ? { ohne_anhang: true } : {}), ...(w.mail_drive ? { mail_drive: true } : {}) });
   $('#regel-form-titel').textContent = `Neue Regel aus Mail „${titelVon(e.text)}“`;
   melde('Prüfe die Regel. Beim Speichern wird auch diese Mail abgelegt.');
@@ -1130,8 +1258,12 @@ async function zeigeVerworfen() {
 // Regeln
 
 async function stammdatenLaden() {
-  const [themen, personen, ordner, wissen] = await Promise.all([dateiLesen('config/themen.yaml'), dateiLesen('config/personen.yaml'),
-    dateiOderLeer(ORDNER_DATEI), dateiOderLeer('config/ablagewissen.yaml')]);
+  const [themen, personen, ordner, wissen, bezuege, vertraege] = await Promise.all([dateiLesen('config/themen.yaml'), dateiLesen('config/personen.yaml'),
+    dateiOderLeer(ORDNER_DATEI), dateiOderLeer('config/ablagewissen.yaml'), dateiOderLeer('config/bezuege.yaml'), dateiOderLeer('config/vertraege.yaml')]);
+  zustand.vertraege = (jsyaml.load(vertraege) || {}).vertraege || [];
+  const b = jsyaml.load(bezuege) || {};
+  zustand.objekte = b.objekte || {};
+  zustand.steuer = b.steuer || {};
   zustand.themen = jsyaml.load(themen.text).themen || {};
   zustand.personen = jsyaml.load(personen.text).personen || {};
   zustand.ordner = (jsyaml.load(ordner) || {}).ordner || {};
@@ -1228,6 +1360,10 @@ function regelFormular(index, vorlage) {
     l.append(c, ' ' + (p.name || schluessel));
     box.append(l);
   }
+  const bz = $('#regel-bezuege');
+  bz.textContent = '';
+  zustand.regelBezuege = bezuegeFelder(r);
+  bz.append(zustand.regelBezuege);
   $('#regel-fehler').textContent = '';
   f.hidden = false;
   f.scrollIntoView({ behavior: 'smooth' });
@@ -1265,6 +1401,10 @@ async function regelAbsenden(ereignis) {
   regel.thema = f.thema.value;
   if (f.unterordner.value.trim()) regel.unterordner = f.unterordner.value.trim();
   regel.personen = [...$('#regel-personen').querySelectorAll('input:checked')].map((c) => c.value);
+  for (const [feld, werte] of Object.entries(zustand.regelBezuege ? zustand.regelBezuege.werte() : {})) {
+    const rein = werte.filter((x) => x !== regel.thema);
+    if (rein.length) regel[feld] = rein;
+  }
   const fehler = regelPruefen(regel, zustand.regeln.regeln, zustand.bearbeitet);
   if (fehler) { $('#regel-fehler').textContent = fehler; return; }
   if (zustand.bearbeitet >= 0) zustand.regeln.regeln[zustand.bearbeitet] = regel;

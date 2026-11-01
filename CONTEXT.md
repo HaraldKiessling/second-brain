@@ -60,6 +60,18 @@ _Avoid_: Machine Learning, Klassifikator
 Bekannte Gegenparteien aus der Drive-Ablage und früheren Steuererklärungen (z. B. „HUK, Hausrat → Versicherungen/01HUK_Hausrat“). Liefert **Vorschläge**, legt aber allein nichts ab.
 _Avoid_: Stammdaten, Mapping
 
+**Vertragsliste**:
+Bekannte Verträge mit Nummer, Ablageordner, **Objekt** und **Steuerbezug** (`config/vertraege.yaml`). Steht eine Vertragsnummer in der Mail, wird ohne Rückfrage abgelegt, so sicher wie mit einer **Regel**. Eine Nummer im Ordnernamen (z. B. 07HUK_Kfz_624_220429-P) zählt ähnlich: gleiche Nummer hebt, eine andere Nummer im Betreff senkt die **Konfidenz**.
+_Avoid_: Policenliste, Stammdaten
+
+**Objekt**:
+Worauf sich ein Inhalt bezieht, z. B. Kieler Str. 37 oder das Auto. Eine **Notiz** kann mehrere haben; Versicherungen beziehen sich immer auf ein Objekt und ein Risiko.
+_Avoid_: Immobilie (zu eng), Asset
+
+**Steuerbezug**:
+Für welche Angabe der Steuererklärung ein Inhalt zählt (Werbungskosten, Vermietung, Vorsorge, §35a, USt Solar, KAP …). Unabhängig vom Ablageordner; eine **Notiz** kann mehrere haben.
+_Avoid_: Steuerkategorie, Anlage (nur ein Teil davon)
+
 **Ordnerliste**:
 Alle bekannten Unterordner der Drive-Ablage je Thema, auch mehrstufig (z. B. „Finanzen/Karten“). Sie steht in `config/ordner.yaml` im Daten-Repo und wächst mit jedem Ablegen in einen neuen Ordner. Die Web-App zeigt sie als Ordnerauswahl, die für eine Mail wahrscheinlichsten Ordner stehen oben.
 _Avoid_: Ordnerbaum (die Brücke kann Drive nicht auflisten, die Liste ist das, was das System kennt)
@@ -86,6 +98,7 @@ _Avoid_: Credentials, Login, Secret (für den Wert selbst)
 - Ein **Adapter** erzeugt **Eingänge**; **Einordnen** macht aus einem **Eingang** genau eine **Notiz**.
 - Eine **Notiz** hat null oder ein **Original**.
 - Eine **Notiz** gehört mindestens einer **Person**.
+- Eine **Notiz** hat ein Hauptthema (bestimmt den einen Drive-Ordner), beliebig viele weitere Themen, **Objekte** und **Steuerbezüge**.
 - **Einordnen** läuft in Stufen: **Regel**, **Spam-Wert**, **Heuristik**, optional KI. Die erste Stufe mit genügend **Konfidenz** entscheidet; sonst entsteht ein **Vorschlag**.
 - Jedes **Einordnen** und jeder **Umbau** erzeugt Einträge im **Änderungsprotokoll**.
 

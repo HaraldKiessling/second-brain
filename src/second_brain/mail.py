@@ -319,8 +319,14 @@ class Ablage:
                                           unterordner_einsetzen(ergebnis.unterordner,
                                                                 mail.datum)) if t)
             durch = ergebnis.durch or 'regel/' + ergebnis.regel
-            meta.update(personen=ergebnis.personen, themen=[ergebnis.thema],
+            themen = [ergebnis.thema] + [t for t in ergebnis.weitere_themen
+                                         if t != ergebnis.thema and t in self.themen]
+            meta.update(personen=ergebnis.personen, themen=themen,
                         ablage=ablage, eingeordnet_durch=durch)
+            if ergebnis.objekte:
+                meta['objekte'] = list(ergebnis.objekte)
+            if ergebnis.steuer:
+                meta['steuer'] = list(ergebnis.steuer)
             if ergebnis.konfidenz < 1:
                 meta['konfidenz'] = round(ergebnis.konfidenz, 2)
             if ergebnis.mail_drive:
@@ -400,6 +406,68 @@ def mail_seite(absender, datum, betreff, text, html='', empfaenger=''):
     return meta + html
 
 
+def _notizen_mit(wurzel, feld, konto):
+    """(pfad, notiz) aus eingang/ und notizen/ dieses Kontos, die feld gesetzt haben."""
+    for basis in ('eingang', 'notizen'):
+        for verz, _, dateien in os.walk(os.path.join(wurzel, basis)):
+            for d in sorted(dateien):
+                if not d.endswith('.md') or d == 'README.md':
+                    continue
+                pfad = os.path.join(verz, d)
+                with open(pfad, encoding='utf-8') as fh:
+                    try:
+                        n = nz.lesen(fh.read())
+                    except nz.FormatFehler:
+                        continue
+                if n.meta.get(feld) and n.meta.get('quelle') == konto:
+                    yield pfad, n
+
+
+def neue_vorschlaege(wurzel, konto, ki, vertraege=(), standard_personen=(), heute=None):
+    """Neue Ordner-Vorschlaege fuer Mails, bei denen die Web-App sie angefordert hat
+    (vorschlag_anfordern: true oder ein Hinweis von Harald). Die KI arbeitet mit dem
+    Notiztext, das Postfach wird nicht gebraucht. Liefert (neu, fehlgeschlagen)."""
+    neu = fehler = 0
+    heute = heute or datetime.date.today()
+    for pfad, n in list(_notizen_mit(wurzel, 'vorschlag_anfordern', konto)):
+        m = n.meta
+        hinweis = m.pop('vorschlag_anfordern')
+        hinweis = hinweis if isinstance(hinweis, str) else ''
+        anhaenge = [str(a) for a in m.get('anhaenge') or []]
+        v = eo.vertrag_finden(vertraege, n.titel, n.text, ' '.join(anhaenge))
+        vorschlag = eo.vertrag_vorschlag(v, standard_personen) if v else None
+        kv = ki.frage(str(m.get('absender') or ''), n.titel, n.text, anhaenge,
+                      hinweis=hinweis) if ki is not None else None
+        if kv is not None and kv.thema:
+            kv = eo.nummer_pruefen(kv, n.titel, n.text, anhaenge)
+            if vorschlag is None:
+                vorschlag = kv
+            else:
+                vorschlag.alternativen = [kv] + kv.alternativen[:1]
+                kv.alternativen = []
+        if vorschlag is None:
+            m['vorschlag_fehler'] = ('KI nicht eingerichtet' if ki is None
+                                     else 'KI hat keinen Ordner vorgeschlagen')
+            fehler += 1
+        else:
+            m.pop('vorschlag_fehler', None)
+            m['vorschlag'] = vorschlag.als_dict()
+            neu += 1
+        with open(pfad, 'w', encoding='utf-8') as fh:
+            fh.write(nz.schreiben(n))
+        protokoll = os.path.join(wurzel, 'protokoll', '%s.md' % heute.strftime('%Y-%m'))
+        if not os.path.exists(protokoll):
+            os.makedirs(os.path.dirname(protokoll), exist_ok=True)
+            with open(protokoll, 'w', encoding='utf-8') as fh:
+                fh.write('# Änderungsprotokoll %s\n\n| Datum | Wer | Änderung |\n| --- | --- | --- |\n'
+                         % heute.strftime('%Y-%m'))
+        with open(protokoll, 'a', encoding='utf-8') as fh:
+            fh.write('| %s | %s | Neue Vorschläge für `%s`%s |\n' % (
+                heute.isoformat(), vorschlag.durch if vorschlag else 'ki',
+                m.get('id'), ' (Hinweis: %s)' % hinweis.replace('|', '/') if hinweis else ''))
+    return neu, fehler
+
+
 def nachholen(wurzel, konto, holen, anhang_ziel=None):
     """Notizen dieses Kontos vervollstaendigen, die die Web-App angefordert hat.
 
@@ -465,7 +533,7 @@ def unterordner_einsetzen(unterordner, datum):
         '{monat}', '%02d' % datum.month).strip('/')
 
 
-def verarbeiten(mails, ablage, regelwerk, lerner=None, einst=None, ki=None):
+def verarbeiten(mails, ablage, regelwerk, lerner=None, einst=None, ki=None, vertraege=()):
     bilanz = Bilanz()
     lerner = lerner or eo.Lerner([], ablage.themen)
     einst = einst or eo.einstellungen({})
@@ -473,7 +541,7 @@ def verarbeiten(mails, ablage, regelwerk, lerner=None, einst=None, ki=None):
         if mail.message_id and mail.message_id in ablage.bekannt:
             bilanz.doppelt += 1
             continue
-        e = eo.einordnen(mail, regelwerk, lerner, einst, ki)
+        e = eo.einordnen(mail, regelwerk, lerner, einst, ki, vertraege)
         pfad = ablage.ablegen(mail, e)
         setattr(bilanz, e.aktion, getattr(bilanz, e.aktion) + 1)
         if e.aktion in (regeln.NOTIZ, regeln.OFFEN):

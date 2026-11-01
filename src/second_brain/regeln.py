@@ -34,6 +34,9 @@ class Ergebnis:
     vorschlag: object = None  # einordnen.Vorschlag bei offen
     spam: float = 0.0
     mail_drive: bool = False  # Mail selbst als PDF in die Drive-Ablage
+    weitere_themen: list = field(default_factory=list)  # Schlagworte neben dem Hauptthema
+    objekte: list = field(default_factory=list)         # config/bezuege.yaml: objekte
+    steuer: list = field(default_factory=list)          # config/bezuege.yaml: steuer
 
 
 def _trifft(muster, text):
@@ -77,7 +80,10 @@ def einordnen(absender, betreff, hat_dokument, regelwerk, empfaenger=''):
                         thema=r['thema'], unterordner=r.get('unterordner', ''),
                         personen=list(r.get('personen') or
                                       regelwerk.get('standard_personen', [])),
-                        mail_drive=bool(r.get('mail_drive')))
+                        mail_drive=bool(r.get('mail_drive')),
+                        weitere_themen=list(r.get('weitere_themen') or []),
+                        objekte=list(r.get('objekte') or []),
+                        steuer=list(r.get('steuer') or []))
 
     if not hat_dokument:
         return Ergebnis(INDEX, 'keine Regel, kein Dokument-Anhang')
