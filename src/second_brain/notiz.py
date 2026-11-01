@@ -12,7 +12,7 @@ import yaml
 
 PFLICHTFELDER = ('id', 'erstellt', 'quelle', 'personen', 'themen')
 ID_MUSTER = re.compile(r'^[a-z0-9][a-z0-9-]*$')
-EINGEORDNET_PRAEFIXE = ('regel/', 'heuristik/', 'ki/', 'manuell')
+EINGEORDNET_PRAEFIXE = ('regel/', 'heuristik/', 'ki/', 'vertrag/', 'manuell')
 
 
 @dataclass
@@ -34,6 +34,8 @@ class Kontext:
     """Bekannte Personen und Themen aus dem Daten-Repo (config/)."""
     personen: set = field(default_factory=set)
     themen: set = field(default_factory=set)
+    objekte: set = field(default_factory=set)
+    steuer: set = field(default_factory=set)
 
 
 class FormatFehler(ValueError):
@@ -82,7 +84,9 @@ def pruefen(notiz, kontext):
         fehler.append('erstellt muss ein Datum JJJJ-MM-TT sein')
 
     for feld, art, bekannt in (('personen', 'Person', kontext.personen),
-                               ('themen', 'Thema', kontext.themen)):
+                               ('themen', 'Thema', kontext.themen),
+                               ('objekte', 'Objekt', kontext.objekte),
+                               ('steuer', 'Steuerbezug', kontext.steuer)):
         werte = m.get(feld)
         if werte is None:
             continue
@@ -95,7 +99,7 @@ def pruefen(notiz, kontext):
 
     durch = m.get('eingeordnet_durch')
     if durch is not None and not str(durch).startswith(EINGEORDNET_PRAEFIXE):
-        fehler.append('eingeordnet_durch muss mit regel/, heuristik/, ki/ oder manuell beginnen')
+        fehler.append('eingeordnet_durch muss mit regel/, heuristik/, ki/, vertrag/ oder manuell beginnen')
 
     if not notiz.titel:
         fehler.append('Ueberschrift "# ..." fehlt')

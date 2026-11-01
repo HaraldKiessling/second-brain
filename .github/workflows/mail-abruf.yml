@@ -63,6 +63,11 @@ jobs:
         run: |
           second-brain nachholen . --konto "${{ inputs.konto }}" --host "${{ inputs.host }}" \
             --postfach "${{ inputs.postfach }}" --anhaenge "$RUNNER_TEMP/anhaenge"
+      - name: Neue Vorschlaege
+        # In der Web-App angefordert ("Neue Vorschläge"), arbeitet mit dem Notiztext
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: second-brain vorschlagen . --konto "${{ inputs.konto }}"
       - name: Anhaenge nach Google Drive
         id: drive
         if: env.MIT_DRIVE == 'true'

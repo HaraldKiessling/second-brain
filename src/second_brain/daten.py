@@ -13,12 +13,36 @@ def _yaml(pfad):
         return yaml.safe_load(fh) or {}
 
 
+def _optional(wurzel, name):
+    pfad = os.path.join(wurzel, 'config', name)
+    return _yaml(pfad) if os.path.exists(pfad) else {}
+
+
 def kontext(wurzel):
-    """Bekannte Personen und Themen aus config/personen.yaml und config/themen.yaml."""
+    """Bekannte Personen, Themen, Objekte und Steuerbezuege aus config/."""
     personen = _yaml(os.path.join(wurzel, 'config', 'personen.yaml'))
     themen = _yaml(os.path.join(wurzel, 'config', 'themen.yaml'))
+    b = bezuege(wurzel)
     return nz.Kontext(personen=set(personen.get('personen', {})),
-                      themen=set(themen.get('themen', {})))
+                      themen=set(themen.get('themen', {})),
+                      objekte=set(b['objekte']), steuer=set(b['steuer']))
+
+
+def bezuege(wurzel):
+    """Objekte und Steuerbezuege aus config/bezuege.yaml (optional)."""
+    d = _optional(wurzel, 'bezuege.yaml')
+    return {'objekte': d.get('objekte') or {}, 'steuer': d.get('steuer') or {}}
+
+
+def vertraege(wurzel):
+    """Bekannte Vertraege aus config/vertraege.yaml (optional)."""
+    return _optional(wurzel, 'vertraege.yaml').get('vertraege') or []
+
+
+def ordnerliste(wurzel):
+    """Thema -> bekannte Unterordner aus config/ordner.yaml (optional)."""
+    return {t: [str(u) for u in (liste or [])]
+            for t, liste in (_optional(wurzel, 'ordner.yaml').get('ordner') or {}).items()}
 
 
 def themen(wurzel):
@@ -43,7 +67,8 @@ def lerner(wurzel, quelle='mail'):
     th = themen(wurzel)
     return einordnen.Lerner(einordnen.beispiele_aus_notizen(notiz_pfade(wurzel), th), th,
                             regelwerk(wurzel, quelle).get('standard_personen', []),
-                            ablagewissen(wurzel), einstellungen(wurzel)['eigene_adressen'])
+                            ablagewissen(wurzel), einstellungen(wurzel)['eigene_adressen'],
+                            bekannte_unterordner(wurzel))
 
 
 def bekannte_unterordner(wurzel):
@@ -57,6 +82,11 @@ def bekannte_unterordner(wurzel):
     for w in ablagewissen(wurzel):
         if w.get('unterordner'):
             bekannt.setdefault(w['thema'], set()).add(w['unterordner'])
+    for t, liste in ordnerliste(wurzel).items():
+        bekannt.setdefault(t, set()).update(liste)
+    for v in vertraege(wurzel):
+        if v.get('unterordner'):
+            bekannt.setdefault(v.get('thema'), set()).add(str(v['unterordner']))
     return bekannt
 
 
@@ -84,6 +114,17 @@ def regelvorschlaege_schreiben(wurzel, quelle='mail'):
 def regelwerk(wurzel, quelle='mail'):
     with open(os.path.join(wurzel, 'regeln', quelle + '.json'), encoding='utf-8') as fh:
         return json.load(fh)
+
+
+def _bezuege_pruefen(eintrag, ktx):
+    fehler = []
+    for feld, art, bekannt in (('weitere_themen', 'Thema', ktx.themen),
+                               ('objekte', 'Objekt', ktx.objekte),
+                               ('steuer', 'Steuerbezug', ktx.steuer)):
+        for w in eintrag.get(feld) or []:
+            if w not in bekannt:
+                fehler.append('%s unbekannt: %s' % (art, w))
+    return fehler
 
 
 def notiz_pfade(wurzel):
@@ -130,6 +171,23 @@ def pruefen(wurzel):
             if not einordnen.unterordner_gueltig(r.get('unterordner', '')):
                 fehler.append((rel, 'Regel %s: Unterordner ungueltig: %s'
                                % (r.get('name'), r.get('unterordner'))))
+            fehler.extend((rel, 'Regel %s: %s' % (r.get('name'), f))
+                          for f in _bezuege_pruefen(r, ktx))
+
+    for i, v in enumerate(vertraege(wurzel), 1):
+        rel = 'config/vertraege.yaml'
+        if not v.get('nummer'):
+            fehler.append((rel, 'Vertrag %d: nummer fehlt' % i))
+        elif einordnen._nummer_muster(v['nummer']) is None:
+            fehler.append((rel, 'Vertrag %d: nummer zu kurz (mind. 5 Zeichen)' % i))
+        if v.get('thema') not in ktx.themen:
+            fehler.append((rel, 'Vertrag %d: Thema unbekannt: %s' % (i, v.get('thema'))))
+        if not einordnen.unterordner_gueltig(str(v.get('unterordner') or '')):
+            fehler.append((rel, 'Vertrag %d: Unterordner ungueltig' % i))
+        for p in v.get('personen') or []:
+            if p not in ktx.personen:
+                fehler.append((rel, 'Vertrag %d: Person unbekannt: %s' % (i, p)))
+        fehler.extend((rel, 'Vertrag %d: %s' % (i, f)) for f in _bezuege_pruefen(v, ktx))
 
     for i, w in enumerate(ablagewissen(wurzel), 1):
         rel = 'config/ablagewissen.yaml'
