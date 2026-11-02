@@ -68,7 +68,7 @@ Regeln für Mails liegen im Daten-Repo unter `regeln/mail.json` (Version 3, ADR 
 ]}
 ```
 
-`teil` ist `absender`, `empfaenger`, `betreff`, `text`, `anhangname`, `anhangtext` oder `ueberall`; `vergleich` ist `wort` (Standard, ganzes Wort, Groß/klein und Umlaute egal), `wortteil`, `nummer` (Trennzeichen egal) oder `nicht`. Werte einer Bedingung sind „oder“, Bedingungen „und“. `dann` kann `thema`, `unterordner`, `personen`, `weitere_themen`, `objekte`, `steuer`, `mail_drive`, `ohne_anhang` und `dauerhaft` setzen, nie das Jahr. Ordnerregeln müssen eindeutig sein; `second-brain konflikte <daten-repo>` prüft sie gegen den Bestand. Regelvorschläge stehen in `regeln/mail-vorschlaege.json` (`second-brain neuaufbau` aus Ordnerliste und Bestand, `second-brain regelvorschlaege` aus der Ablage). Ein vollständiges Beispiel steht in `beispiel-daten/regeln/mail.json`.
+`teil` ist `absender`, `empfaenger`, `betreff`, `text`, `anhangname`, `anhangtext` oder `ueberall`; `vergleich` ist `wort` (Standard, ganzes Wort, Groß/klein und Umlaute egal), `wortteil`, `nummer` (Trennzeichen egal) oder `nicht`. Werte einer Bedingung sind „oder“, Bedingungen „und“. `dann` kann `thema`, `unterordner`, `personen`, `weitere_themen`, `objekte`, `steuer`, `mail_drive`, `ohne_anhang` und `dauerhaft` setzen, nie das Jahr. Ordnerregeln müssen eindeutig sein; `second-brain konflikte <daten-repo>` prüft sie gegen den Bestand. Regelvorschläge stehen in `regeln/mail-vorschlaege.json` (`second-brain neuaufbau` aus Ordnerliste, Bestand und den Kennungen in `index/drive-kennungen.json`, `second-brain regelvorschlaege` aus der Ablage). Ein vollständiges Beispiel steht in `beispiel-daten/regeln/mail.json`.
 
 ## Einordnen in Stufen
 

@@ -189,6 +189,14 @@ def _konflikte(args):
 def _neuaufbau(args):
     """Regelvorschlaege aus Ordnerliste und Bestand neu aufbauen (ADR 0004)."""
     from . import neuaufbau
+    if args.dokumente:
+        import json
+        with open(args.dokumente, encoding='utf-8') as fh:
+            doks = json.load(fh)
+        erg = neuaufbau.kennungen_schreiben(args.daten, doks, args.quelle)
+        print('%d Dokumente, %d Ordner mit Kennungen -> %s' % (
+            len(doks), sum(1 for e in erg.values() if e['nummern'] or e['domains']),
+            neuaufbau.KENNUNGEN))
     neu, ohne = neuaufbau.schreiben(args.daten)
     for v in neu:
         print('%-28s %-40s -> %s/%s  (%d Mails, %d Konflikte)' % (
@@ -241,6 +249,9 @@ def main(argv=None):
     na = sub.add_parser('neuaufbau',
                         help='Regelvorschlaege aus Ordnerliste und Bestand neu aufbauen')
     na.add_argument('daten', help='Pfad zum Daten-Repo')
+    na.add_argument('--dokumente', help='JSON-Liste [{ordner, titel, text}] mit gelesenen '
+                    'Drive-Dokumenten; daraus wird index/drive-kennungen.json (ohne Text)')
+    na.add_argument('--quelle', default='Google Drive', help='Herkunft der Dokumente')
     na.set_defaults(fn=_neuaufbau)
 
     ma = sub.add_parser('mail-abruf', help='Mails abholen und ablegen (IMAP oder .eml-Ordner)')

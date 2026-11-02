@@ -73,7 +73,11 @@ Ordner und Merkmale, die die KI für einen **Eingang** annimmt, zu dem keine **R
 _Avoid_: Empfehlung, Prognose
 
 **Regelvorschlag**:
-Eine **Regel**, die das System vorschlägt, mit Beispielmails aus dem **Bestand** und ihren **Regelkonflikten**: aus dem Neuaufbau (Nummer oder Gegenpartei im Ordnernamen) oder weil Harald zweimal Gleiches abgelegt hat. Gilt erst, wenn Harald sie übernimmt.
+Eine **Regel**, die das System vorschlägt, mit Beispielmails aus dem **Bestand** und ihren **Regelkonflikten**: aus dem Neuaufbau (Nummer oder Gegenpartei im Ordnernamen, **Kennungen** der Dokumente im Ordner) oder weil Harald zweimal Gleiches abgelegt hat. Gilt erst, wenn Harald sie übernimmt.
+
+**Kennung**:
+Ein Wert, der in jedem Schreiben einer Gegenpartei wiederkehrt und einen Ordner erkennbar macht: Vertrags-, Kunden-, Mitglieds-, Versicherten-, Policennummer, Kassenzeichen, Steuernummer, oder die Domain der Gegenpartei. Gelesen aus den Dokumenten, die schon im Ordner liegen; zählt nur, wenn sie zu diesem Ordner gehört (beschriftet oder mehrfach, nicht in vielen Ordnern). Rechnungs-, Telefon-, Kontonummern, Beträge und Daten sind keine Kennung.
+_Avoid_: Merkmal (das ist, was eine Regel setzt)
 _Avoid_: Regelentwurf
 
 **Objekt**:
