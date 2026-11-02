@@ -76,6 +76,18 @@ _Avoid_: Steuerkategorie, Anlage (nur ein Teil davon)
 Alle bekannten Unterordner der Drive-Ablage je Thema, auch mehrstufig (z. B. „Finanzen/Karten“). Sie steht in `config/ordner.yaml` im Daten-Repo und wächst mit jedem Ablegen in einen neuen Ordner. Die Web-App zeigt sie als Ordnerauswahl, die für eine Mail wahrscheinlichsten Ordner stehen oben.
 _Avoid_: Ordnerbaum (die Brücke kann Drive nicht auflisten, die Liste ist das, was das System kennt)
 
+**Jahresordner**:
+Die oberste Ebene der Drive-Ablage, ein Ordner je Jahr (2020 … 2027), darin die Themenordner. Das laufende Jahr heißt in Drive „0-2026“, damit es oben steht; beim Jahreswechsel benennt Harald um. Die Web-App zeigt immer nur die Jahreszahl („2026“), das System merkt sich die Ordner über ihre ID.
+_Avoid_: Jahresablage, Archivjahr
+
+**Zugehörigkeitsjahr**:
+Das Jahr, in dessen **Jahresordner** ein Inhalt kommt. Mit Geldfluss ist es das Jahr der Zahlung (steuerliche Relevanz; ersatzweise Fälligkeit oder Abbuchungstermin, bis **Umsätze** den echten Tag liefern), ohne Geldfluss das Jahr, das der Inhalt betrifft, sonst das Datum der Mail. Beispiel: Beitragsrechnung vom Dezember 2026, abgebucht am 01.01.2027 → 2027; Abrechnung für 2026 mit Nachzahlung 2027 → 2027. Steht als `jahr` in der **Notiz**, wenn es vom Empfangsjahr abweicht.
+_Avoid_: Empfangsjahr (das ist nur der Ersatz), Belegjahr
+
+**Dauerablage**:
+Der Ordner „0000-dauerhaft“ für Inhalte, die viele Jahre betreffen (Kauf-, Darlehens-, Miet-, Rentenvertrag, Grundbuch, Versicherungsschein, Förderbescheid). Er hat eigene Unterordner (z. B. „03 Kieler 37“, „Immobilien“). Ein solcher Inhalt liegt in seinem **Jahresordner** und zusätzlich als Kopie in der Dauerablage. Das System schlägt das vor, Harald bestätigt es.
+_Avoid_: 0000 (so heißt der Ordner nicht), Archiv
+
 **Spam-Wert**:
 Wie sehr eine Mail nach Werbung oder Spam aussieht, von 0 bis 1, aus Merkmalen im Mail-Kopf (Abmeldelink, Massenversand, Spam-Markierung des Anbieters, Gmail-Kategorie) und Betreff. Ab der Spam-Schwelle wird verworfen; die Mail bleibt als **Indexeintrag** mit Grund auffindbar.
 _Avoid_: Spam-Score, Junk
@@ -92,6 +104,20 @@ _Avoid_: Log
 Was ein **Adapter** braucht, um seine **Quelle** zu erreichen (Adresse, Passwort, API-Schlüssel). Sie liegen als GitHub-Secret und sind danach nicht mehr lesbar; die einzige lesbare Kopie hat Haralds Google Passwortmanager. Für Mail-Konten sind es App-Passwörter, nie das normale Konto-Passwort, deshalb liegt nichts doppelt.
 _Avoid_: Credentials, Login, Secret (für den Wert selbst)
 
+## Wörter in der Web-App
+
+Die Web-App spricht Alltagssprache; die Begriffe oben gelten in Code und Doku.
+
+| Web-App | Begriff |
+| --- | --- |
+| Zu erledigen, offen | **Eingang** |
+| abgelegt | **Notiz** |
+| nur gemerkt | **Indexeintrag** |
+| aussortiert | verworfen (**Spam-Wert** oder Verwerfen-Liste) |
+| unsicher, Vorschlag | **Vorschlag** unter der **Schwelle** (Prozentzahlen zeigt die Web-App nicht) |
+| Ordner in Drive, „2026 › 08Versicherungen › …“ | **Jahresordner**, Themenordner (`ablage` in `config/themen.yaml`) und Unterordner, immer mit den echten Drive-Namen |
+| Einrichtung | Regeln, **Vertragsliste**, **Ordnerliste**, Personen, **Zugangsdaten**, Abrufe |
+
 ## Relationships
 
 - Ein **Adapter** bedient genau eine **Quelle**; eine **Quelle** hat höchstens einen **Adapter**.
@@ -99,9 +125,12 @@ _Avoid_: Credentials, Login, Secret (für den Wert selbst)
 - Eine **Notiz** hat null oder ein **Original**.
 - Eine **Notiz** gehört mindestens einer **Person**.
 - Eine **Notiz** hat ein Hauptthema (bestimmt den einen Drive-Ordner), beliebig viele weitere Themen, **Objekte** und **Steuerbezüge**.
+- Der Drive-Ordner einer **Notiz** ist **Jahresordner** (nach **Zugehörigkeitsjahr**) › Themenordner › Unterordner; dazu höchstens eine Kopie in der **Dauerablage**.
 - **Einordnen** läuft in Stufen: **Regel**, **Spam-Wert**, **Heuristik**, optional KI. Die erste Stufe mit genügend **Konfidenz** entscheidet; sonst entsteht ein **Vorschlag**.
 - Jedes **Einordnen** und jeder **Umbau** erzeugt Einträge im **Änderungsprotokoll**.
 
 ## Flagged ambiguities
 
 - „Dokument“ wurde sowohl für PDFs als auch für Notizen benutzt. Geklärt: die Datei heißt **Original**, die Markdown-Fassung heißt **Notiz**.
+- „Jahr“ einer Mail: Empfangsjahr oder Jahr, zu dem sie gehört? Geklärt (2026-11-01): abgelegt wird nach **Zugehörigkeitsjahr**, bei Geldfluss zählt die Zahlung.
+- Ordnernamen: Die Web-App zeigte Kurznamen („Albert-Einstein 59 / versicherung“), die Harald in Drive nicht wiederfand. Geklärt: überall die echten Drive-Namen mit Nummern und Jahr, mit Link in den Ordner.

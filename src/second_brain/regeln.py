@@ -37,6 +37,9 @@ class Ergebnis:
     weitere_themen: list = field(default_factory=list)  # Schlagworte neben dem Hauptthema
     objekte: list = field(default_factory=list)         # config/bezuege.yaml: objekte
     steuer: list = field(default_factory=list)          # config/bezuege.yaml: steuer
+    jahr: int = 0             # Zugehoerigkeitsjahr laut KI (0 = nicht genannt), siehe jahr.py
+    jahr_grund: str = ''
+    dauerhaft: str = ''       # Grund, warum es zusaetzlich nach 0000-dauerhaft gehoert
 
 
 def _trifft(muster, text):

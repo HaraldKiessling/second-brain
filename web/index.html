@@ -13,7 +13,7 @@
   <header>
     <h1>Second Brain</h1>
     <span id="repo-name"></span>
-    <button id="abmelden" class="leise" hidden>Abmelden</button>
+    <button id="abmelden" class="leise klein" hidden>Abmelden</button>
   </header>
 
   <main>
@@ -34,139 +34,195 @@
     </section>
 
     <nav id="reiter" hidden>
-      <button data-reiter="uebersicht" class="aktiv">Übersicht</button>
-      <button data-reiter="eingang">Eingang</button>
-      <button data-reiter="mails">Mails</button>
-      <button data-reiter="zugang">Zugangsdaten</button>
-      <button data-reiter="regeln">Regeln</button>
-      <button data-reiter="dateien">Einstellungen</button>
-      <button data-reiter="ablaeufe">Abläufe</button>
+      <button data-reiter="start" class="aktiv">Zu erledigen</button>
+      <button data-reiter="mails">Alle Mails</button>
+      <button data-reiter="einrichtung" class="zahnrad" title="Einrichtung">⚙ Einrichtung</button>
     </nav>
 
-    <section id="uebersicht" class="reiter" hidden>
-      <h2>Übersicht</h2>
-      <p id="ablauf-status"></p>
-      <h3>Abrufe</h3>
-      <table><thead><tr><th>Zeit</th><th>Konto</th><th>Ergebnis</th></tr></thead><tbody id="lauf-liste"></tbody></table>
-      <h3>Automatisch abgelegt</h3>
-      <p class="hinweis">Was Regeln, Heuristik oder KI ohne Rückfrage abgelegt haben. Liegt etwas falsch, korrigiere es; daraus lernt das System.</p>
-      <div id="auto-liste"></div>
-    </section>
-
-    <section id="eingang" class="reiter" hidden>
-      <h2>Eingang</h2>
-      <p>Mails, bei denen sich das System nicht sicher genug war. Bestätige den Vorschlag oder korrigiere ihn; daraus lernt es für die nächste Mail desselben Absenders.</p>
-      <div id="eingang-liste"></div>
-      <h3>Zuletzt verworfen</h3>
-      <p class="hinweis">Verworfene Mails dieses Monats mit Grund. Steht hier etwas Wichtiges, lege eine Regel für den Absender an.</p>
-      <table><thead><tr><th>Datum</th><th>Absender</th><th>Betreff</th><th>Grund</th></tr></thead><tbody id="verworfen-liste"></tbody></table>
+    <section id="start" class="reiter" hidden>
+      <label class="suche-gross">Wo liegt …?
+        <input id="such-feld" type="search" placeholder="Absender, Betreff oder Ordner, z. B. HUK oder Rechnung" autocomplete="off">
+      </label>
+      <div id="such-ergebnis"></div>
+      <div id="start-inhalt">
+        <p id="ablauf-status" class="hinweis"></p>
+        <p id="auto-zeile"></p>
+        <h2>Zu erledigen <span id="offen-zahl" class="zahl"></span></h2>
+        <p class="hinweis">Bei diesen Mails war sich das System nicht sicher. Prüfe, wo sie hinkommen, und tippe „Passt so“. Daraus lernt es für die nächste Mail desselben Absenders.</p>
+        <div id="eingang-liste"></div>
+        <div id="dauerhaft-bereich" hidden>
+          <h3>Auch in 0000-dauerhaft?</h3>
+          <p class="hinweis">Diese Dokumente wurden abgelegt und betreffen vermutlich viele Jahre. Mit „Ja“ kommt eine Kopie nach 0000-dauerhaft.</p>
+          <div id="dauerhaft-liste"></div>
+        </div>
+        <details id="aussortiert">
+          <summary>Aussortiert in diesem Monat</summary>
+          <p class="hinweis">Werbung und Spam, nur gemerkt. Steht hier etwas Wichtiges, öffne es unter „Alle Mails“ und lege es ab.</p>
+          <table><thead><tr><th>Datum</th><th>Absender</th><th>Betreff</th><th>Grund</th></tr></thead><tbody id="verworfen-liste"></tbody></table>
+        </details>
+      </div>
     </section>
 
     <section id="mails" class="reiter" hidden>
-      <h2>Mails</h2>
-      <p>Alle Mails eines Monats und wo sie im Second Brain liegen. Du kannst eine Mail anders ablegen, eine Mail aus dem Index zur Notiz machen und wichtige Mails (z. B. Buchungsbestätigungen) als PDF in den Drive-Ordner geben.</p>
+      <h2>Alle Mails</h2>
+      <p class="hinweis">Jede Mail eines Monats und wo sie liegt. Du kannst eine Mail woanders ablegen, eine nur gemerkte Mail ablegen und wichtige Mails (z. B. Buchungsbestätigungen) als PDF in den Drive-Ordner geben.</p>
       <div class="reihe">
         <label>Monat <select id="mails-monat"></select></label>
         <label>Zeigen
           <select id="mails-art">
             <option value="">alle</option>
-            <option value="notiz">Notizen</option>
-            <option value="drive">in Google Drive</option>
-            <option value="eingang">im Eingang</option>
-            <option value="index">nur im Index</option>
-            <option value="verworfen">verworfen</option>
+            <option value="notiz">abgelegt</option>
+            <option value="auto">automatisch abgelegt</option>
+            <option value="drive">mit Dateien in Drive</option>
+            <option value="eingang">offen</option>
+            <option value="index">nur gemerkt</option>
+            <option value="verworfen">aussortiert</option>
           </select>
         </label>
-        <label>Suche <input id="mails-suche" type="search" placeholder="Absender oder Betreff"></label>
+        <label>Suche <input id="mails-suche" type="search" placeholder="Absender, Betreff oder Ordner"></label>
       </div>
       <p id="mails-zahl" class="hinweis"></p>
       <div id="mails-liste"></div>
     </section>
 
-    <section id="zugang" class="reiter" hidden>
-      <h2>Zugangsdaten</h2>
-      <p>Werte werden verschlüsselt als GitHub-Secret gespeichert. Danach kann sie nur noch der Ablauf lesen, auch diese Seite nicht.</p>
-      <div id="konten"></div>
-      <div id="drive-bereich" class="karte">
-        <h3>Google Drive verbinden</h3>
-        <p class="hinweis">Damit Mail-Anhänge in deinen Drive-Ordnern landen. Einmalig, alles im Browser: Ein kleines Skript im Google-Konto mit Schreibrecht auf die Ordner (Agentenkonto) legt die Dateien ab.</p>
-        <ol>
-          <li>Öffne <a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener">script.google.com</a> mit dem Agentenkonto. Prüfe oben rechts, dass das richtige Konto angemeldet ist.</li>
-          <li>Ersetze den vorhandenen Text durch diesen Code und speichere: <button id="drive-code-kopieren" class="klein">Code kopieren</button>
-            <textarea id="drive-code" readonly rows="5"></textarea></li>
-          <li><b>Bereitstellen → Neue Bereitstellung</b>, Typ <b>Web-App</b>, Ausführen als <b>Ich</b>, Zugriff <b>Jeder</b>. Google fragt nach Berechtigungen: <b>Erweitert → „… öffnen (unsicher)“ → Zulassen</b>. Die Warnung kommt, weil es dein eigenes, ungeprüftes Skript ist; geschützt ist es durch den Schlüssel im Code.</li>
-          <li>Web-App-URL hier einfügen:
-            <input id="drive-url" placeholder="https://script.google.com/macros/s/…/exec">
-            <button id="drive-testen">Testen und speichern</button></li>
-        </ol>
-        <div id="drive-ergebnis" class="hinweis"></div>
-      </div>
-      <details id="secret-neu-bereich"><summary>Weitere Secrets</summary>
-        <table><thead><tr><th>Name</th><th>Wofür</th><th>Stand</th><th></th></tr></thead><tbody id="secrets"></tbody></table>
-        <form id="secret-neu-form">
-          <label>Name <input id="secret-neu-name" name="username" autocomplete="username" placeholder="NAME_IN_GROSSBUCHSTABEN"></label>
-          <label>Wert <input id="secret-neu-wert" name="password" type="password" autocomplete="new-password"></label>
-          <button type="submit">Wert setzen</button>
+    <section id="einrichtung" class="reiter" hidden>
+      <h2>Einrichtung</h2>
+      <nav id="unterreiter">
+        <button data-teil="regeln" class="aktiv">Regeln</button>
+        <button data-teil="vertraege">Verträge</button>
+        <button data-teil="ordner">Ordner</button>
+        <button data-teil="personen">Personen</button>
+        <button data-teil="zugang">Zugangsdaten</button>
+        <button data-teil="ablaeufe">Abrufe</button>
+        <button data-teil="dateien">Für Fortgeschrittene</button>
+      </nav>
+
+      <div id="teil-regeln" class="teil">
+      <p>Passt eine Regel auf Absender, Empfänger oder Betreff (alle angegebenen müssen passen), wird eine Mail mit Dokument ohne Rückfrage abgelegt. Muster sind Wortteile, Groß-/Kleinschreibung egal.</p>
+        <table><thead><tr><th>Name</th><th>Absender enthält</th><th>Empfänger enthält</th><th>Betreff enthält</th><th>Ordner in Drive</th><th>Personen</th><th></th></tr></thead><tbody id="regel-liste"></tbody></table>
+        <button id="regel-neu">Neue Regel</button>
+        <div id="vorschlag-bereich" hidden>
+          <h3>Regelvorschläge</h3>
+          <p class="hinweis">Absender, deren Mails schon mehrmals gleich eingeordnet wurden. Mit einer Regel landen sie künftig ohne Rückfrage.</p>
+          <table><thead><tr><th>Absender</th><th>Thema</th><th>Unterordner</th><th>Warum</th><th></th></tr></thead><tbody id="vorschlag-liste"></tbody></table>
+        </div>
+        <form id="regel-form" hidden>
+          <h3 id="regel-form-titel">Regel</h3>
+          <label>Name <input name="name" required></label>
+          <label>Absender enthält (mit Komma trennen) <input name="absender"></label>
+          <label>Empfänger (An/Cc) enthält (mit Komma trennen) <input name="empfaenger"></label>
+          <label>Betreff enthält (mit Komma trennen) <input name="betreff"></label>
+          <label><input type="checkbox" name="ohne_anhang" style="display:inline;width:auto"> auch Mails ohne Anhang als Notiz ablegen</label>
+          <label><input type="checkbox" name="mail_drive" style="display:inline;width:auto"> Mail zusätzlich als PDF in den Drive-Ordner legen</label>
+          <label>Thema <select name="thema" required></select></label>
+          <label>Unterordner in der Ablage <input name="unterordner" placeholder="z. B. ionos/rechnungen/{jahr}"></label>
+          <p class="hinweis" id="regel-pfad"></p>
+          <fieldset><legend>Personen</legend><div id="regel-personen"></div></fieldset>
+          <div id="regel-bezuege"></div>
+          <button type="submit">Speichern</button>
+          <button type="button" id="regel-abbrechen" class="leise">Abbrechen</button>
+          <p id="regel-fehler" class="fehler"></p>
         </form>
-      </details>
-    </section>
-
-    <section id="regeln" class="reiter" hidden>
-      <h2>Regeln für Mails</h2>
-      <p>Passt eine Regel auf Absender, Empfänger oder Betreff (alle angegebenen müssen passen), wird eine Mail mit Dokument ohne KI zur Notiz. Muster sind Wortteile, Groß-/Kleinschreibung egal.</p>
-      <table><thead><tr><th>Name</th><th>Absender enthält</th><th>Empfänger enthält</th><th>Betreff enthält</th><th>Thema</th><th>Personen</th><th></th></tr></thead><tbody id="regel-liste"></tbody></table>
-      <button id="regel-neu">Neue Regel</button>
-      <div id="vorschlag-bereich" hidden>
-        <h3>Regelvorschläge</h3>
-        <p class="hinweis">Absender, deren Mails schon mehrmals gleich eingeordnet wurden. Mit einer Regel landen sie künftig ohne Rückfrage.</p>
-        <table><thead><tr><th>Absender</th><th>Thema</th><th>Unterordner</th><th>Warum</th><th></th></tr></thead><tbody id="vorschlag-liste"></tbody></table>
+        <h3>Immer aussortieren (Spam, Newsletter)</h3>
+        <p class="hinweis">Ein Absender oder Wortteil pro Zeile. Solche Mails bleiben nur gemerkt.</p>
+        <textarea id="verwerfen" rows="8"></textarea>
+        <button id="verwerfen-speichern">Speichern</button>
       </div>
-      <form id="regel-form" hidden>
-        <h3 id="regel-form-titel">Regel</h3>
-        <label>Name <input name="name" required></label>
-        <label>Absender enthält (mit Komma trennen) <input name="absender"></label>
-        <label>Empfänger (An/Cc) enthält (mit Komma trennen) <input name="empfaenger"></label>
-        <label>Betreff enthält (mit Komma trennen) <input name="betreff"></label>
-        <label><input type="checkbox" name="ohne_anhang" style="display:inline;width:auto"> auch Mails ohne Anhang als Notiz ablegen</label>
-        <label><input type="checkbox" name="mail_drive" style="display:inline;width:auto"> Mail zusätzlich als PDF in den Drive-Ordner legen</label>
-        <label>Thema <select name="thema" required></select></label>
-        <label>Unterordner in der Ablage <input name="unterordner" placeholder="z. B. ionos/rechnungen/{jahr}"></label>
-        <fieldset><legend>Personen</legend><div id="regel-personen"></div></fieldset>
-        <div id="regel-bezuege"></div>
-        <button type="submit">Speichern</button>
-        <button type="button" id="regel-abbrechen" class="leise">Abbrechen</button>
-        <p id="regel-fehler" class="fehler"></p>
-      </form>
-      <h3>Verwerfen (Spam, Newsletter)</h3>
-      <p>Ein Muster pro Zeile.</p>
-      <textarea id="verwerfen" rows="8"></textarea>
-      <button id="verwerfen-speichern">Speichern</button>
-    </section>
 
-    <section id="dateien" class="reiter" hidden>
-      <h2>Einstellungen</h2>
-      <label>Datei
-        <select id="datei-wahl">
-          <option>config/personen.yaml</option>
-          <option>config/themen.yaml</option>
-          <option>regeln/mail.json</option>
-          <option>config/einordnen.yaml</option>
-          <option>config/ablagewissen.yaml</option>
-          <option>config/vertraege.yaml</option>
-          <option>config/ordner.yaml</option>
-          <option>config/bezuege.yaml</option>
-        </select>
-      </label>
-      <textarea id="datei-inhalt" rows="22" spellcheck="false"></textarea>
-      <button id="datei-speichern">Speichern</button>
-      <p id="datei-fehler" class="fehler"></p>
-    </section>
+      <div id="teil-vertraege" class="teil" hidden>
+        <p class="hinweis">Steht eine dieser Vertragsnummern in einer Mail, wird sie ohne Rückfrage in den Ordner des Vertrags gelegt. Trennzeichen in der Nummer sind egal.</p>
+        <div id="vertrag-liste"></div>
+        <button id="vertrag-neu">Neuer Vertrag</button>
+        <form id="vertrag-form" class="karte" hidden>
+          <h3 id="vertrag-form-titel">Vertrag</h3>
+          <div class="reihe">
+            <label>Vertragsnummer <input name="nummer" required placeholder="z. B. 624/220429-P"></label>
+            <label>Bezeichnung <input name="name" placeholder="z. B. HUK Kfz-Versicherung"></label>
+          </div>
+          <label>Weitere Schreibweisen der Nummer (mit Komma trennen) <input name="auch"></label>
+          <div id="vertrag-ordner"></div>
+          <button type="submit">Speichern</button>
+          <button type="button" id="vertrag-abbrechen" class="leise">Abbrechen</button>
+          <p id="vertrag-fehler" class="fehler"></p>
+        </form>
+      </div>
 
-    <section id="ablaeufe" class="reiter" hidden>
-      <h2>Abläufe</h2>
-      <p>Ablauf <strong>Mail</strong>: holt Mails von GMX und Gmail ab.</p>
-      <button id="mail-starten">Jetzt starten</button>
-      <table><thead><tr><th>Gestartet</th><th>Status</th><th>Ergebnis</th></tr></thead><tbody id="laeufe"></tbody></table>
+      <div id="teil-ordner" class="teil" hidden>
+        <p class="hinweis">Diese Unterordner kennt das System aus deinem Drive. Neue kommen beim Ablegen dazu. Ordner, die du direkt in Drive anlegst, kannst du hier eintragen.</p>
+        <form id="ordner-form" class="reihe">
+          <label>Themenordner <select name="thema"></select></label>
+          <label>Neuer Unterordner (Ebenen mit /) <input name="pfad" placeholder="z. B. 09HUK_Hausrat"></label>
+          <button type="submit">Eintragen</button>
+        </form>
+        <p id="ordner-fehler" class="fehler"></p>
+        <div id="ordner-baum"></div>
+      </div>
+
+      <div id="teil-personen" class="teil" hidden>
+        <p class="hinweis">Für wen eine Mail ist. Jede abgelegte Mail gehört mindestens einer Person.</p>
+        <div id="personen-liste"></div>
+        <form id="person-form" class="reihe">
+          <label>Neue Person <input name="name" placeholder="Vorname"></label>
+          <button type="submit">Hinzufügen</button>
+        </form>
+        <label class="haken"><span>Vorausgewählt bei neuen Mails:</span></label>
+        <div id="standard-personen"></div>
+        <p id="personen-fehler" class="fehler"></p>
+      </div>
+
+      <div id="teil-zugang" class="teil" hidden>
+      <p>Werte werden verschlüsselt als GitHub-Secret gespeichert. Danach kann sie nur noch der Ablauf lesen, auch diese Seite nicht.</p>
+        <div id="konten"></div>
+        <div id="drive-bereich" class="karte">
+          <h3>Google Drive verbinden</h3>
+          <p class="hinweis">Damit Mail-Anhänge in deinen Drive-Ordnern landen. Einmalig, alles im Browser: Ein kleines Skript im Google-Konto mit Schreibrecht auf die Ordner (Agentenkonto) legt die Dateien ab.</p>
+          <ol>
+            <li>Öffne <a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener">script.google.com</a> mit dem Agentenkonto. Prüfe oben rechts, dass das richtige Konto angemeldet ist.</li>
+            <li>Ersetze den vorhandenen Text durch diesen Code und speichere: <button id="drive-code-kopieren" class="klein">Code kopieren</button>
+              <textarea id="drive-code" readonly rows="5"></textarea></li>
+            <li><b>Bereitstellen → Neue Bereitstellung</b>, Typ <b>Web-App</b>, Ausführen als <b>Ich</b>, Zugriff <b>Jeder</b>. Google fragt nach Berechtigungen: <b>Erweitert → „… öffnen (unsicher)“ → Zulassen</b>. Die Warnung kommt, weil es dein eigenes, ungeprüftes Skript ist; geschützt ist es durch den Schlüssel im Code.</li>
+            <li>Web-App-URL hier einfügen:
+              <input id="drive-url" placeholder="https://script.google.com/macros/s/…/exec">
+              <button id="drive-testen">Testen und speichern</button></li>
+          </ol>
+          <div id="drive-ergebnis" class="hinweis"></div>
+        </div>
+        <details id="secret-neu-bereich"><summary>Weitere Secrets</summary>
+          <table><thead><tr><th>Name</th><th>Wofür</th><th>Stand</th><th></th></tr></thead><tbody id="secrets"></tbody></table>
+          <form id="secret-neu-form">
+            <label>Name <input id="secret-neu-name" name="username" autocomplete="username" placeholder="NAME_IN_GROSSBUCHSTABEN"></label>
+            <label>Wert <input id="secret-neu-wert" name="password" type="password" autocomplete="new-password"></label>
+            <button type="submit">Wert setzen</button>
+          </form>
+        </details>
+      </div>
+
+      <div id="teil-ablaeufe" class="teil" hidden>
+        <p>Der Abruf holt Mails von GMX und Gmail, legt sie ab und bringt Dateien nach Drive. Er läuft automatisch; hier kannst du ihn sofort starten.</p>
+        <button id="mail-starten">Jetzt abrufen</button>
+        <table><thead><tr><th>Gestartet</th><th>Status</th><th>Ergebnis</th></tr></thead><tbody id="laeufe"></tbody></table>
+        <h3>Was die letzten Abrufe gebracht haben</h3>
+        <table><thead><tr><th>Zeit</th><th>Konto</th><th>Ergebnis</th></tr></thead><tbody id="lauf-liste"></tbody></table>
+      </div>
+
+      <div id="teil-dateien" class="teil" hidden>
+        <p class="hinweis">Die Einstellungsdateien als Text. Nur nötig für Dinge, die es oben nicht als Formular gibt. Vor dem Speichern wird das Format geprüft.</p>
+        <label>Datei
+          <select id="datei-wahl">
+            <option>config/einordnen.yaml</option>
+            <option>config/themen.yaml</option>
+            <option>config/ablagewissen.yaml</option>
+            <option>config/bezuege.yaml</option>
+            <option>config/vertraege.yaml</option>
+            <option>config/ordner.yaml</option>
+            <option>config/personen.yaml</option>
+            <option>regeln/mail.json</option>
+          </select>
+        </label>
+        <textarea id="datei-inhalt" rows="22" spellcheck="false"></textarea>
+        <button id="datei-speichern">Speichern</button>
+        <p id="datei-fehler" class="fehler"></p>
+      </div>
     </section>
 
     <p id="meldung" role="status"></p>
