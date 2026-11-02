@@ -75,15 +75,15 @@ def test_unbekannt_mit_anhang_landet_im_eingang(repo):
     dateien = [d for d in os.listdir(os.path.join(repo, 'eingang')) if d.endswith('.md')]
     assert len(dateien) == 1
     with open(os.path.join(repo, 'eingang', dateien[0]), encoding='utf-8') as fh:
-        assert nz.lesen(fh.read()).meta['offen_grund'] == 'unbekannter Absender mit Dokument'
+        assert nz.lesen(fh.read()).meta['offen_grund'] == 'keine Regel passt'
 
 
 def test_verworfene_mail_bleibt_mit_grund_im_index(repo):
-    assert lauf(repo, [roh('news@shop.de', 'Newsletter KW 44')]).verwerfen == 1
+    assert lauf(repo, [roh('newsletter@shop.de', 'KW 44')]).verwerfen == 1
     assert not os.path.exists(os.path.join(repo, 'eingang'))
     with open(os.path.join(repo, 'index', 'mail', '2026-10.jsonl'), encoding='utf-8') as fh:
         zeile = json.loads(fh.readline())
-    assert zeile['verworfen'] == 'Spam/Newsletter: newsletter'
+    assert zeile['verworfen'] == 'Regel newsletter (Absender: newsletter)'
 
 
 def test_zweiter_lauf_erkennt_bekannte_mails(repo):

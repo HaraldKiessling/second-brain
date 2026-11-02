@@ -23,30 +23,39 @@ def _ki(wurzel, einst):
     schluessel = os.environ.get('OPENROUTER_API_KEY')
     if not (einst['ki']['aktiv'] and schluessel):
         return None
+    b = daten.bezuege(wurzel)
     return einordnen.KI(schluessel, einst['ki']['modell'], daten.themen(wurzel),
                         daten.kontext(wurzel).personen, einst['ki']['max_pro_lauf'],
                         hinweise=einst['ki']['hinweise'],
                         unterordner=daten.bekannte_unterordner(wurzel),
-                        objekte=daten.bezuege(wurzel)['objekte'],
-                        steuer=daten.bezuege(wurzel)['steuer'],
-                        vertraege=daten.vertraege(wurzel),
+                        objekte=b['objekte'], steuer=b['steuer'],
                         beispiele=einordnen.beispiele_aus_notizen(daten.notiz_pfade(wurzel),
                                                                   daten.themen(wurzel)))
 
 
 def _einordnen(args):
-    from . import einordnen, mail
+    from . import anhangtext, einordnen, mail, regeln
+    anhaenge = []
+    for n in args.anhang or []:
+        inhalt = b''
+        if os.path.exists(n):
+            with open(n, 'rb') as fh:
+                inhalt = fh.read()
+        anhaenge.append((os.path.basename(n), inhalt))
     m = mail.Mail(message_id='', datum=datetime.date.today(), absender=args.absender,
-                  betreff=args.betreff, text='',
-                  anhaenge=[(n, b'') for n in args.anhang or []], empfaenger=args.an or '')
-    einst = daten.einstellungen(args.daten)
-    e = einordnen.einordnen(m, daten.regelwerk(args.daten), daten.lerner(args.daten), einst,
-                            vertraege=daten.vertraege(args.daten))
-    print('%s, Konfidenz %.2f (%s)' % (e.aktion, e.konfidenz, e.grund))
+                  betreff=args.betreff, text=args.text or '', anhaenge=anhaenge,
+                  empfaenger=args.an or '')
+    if m.hat_dokument:
+        m.anhangtext = anhangtext.texte(m.dokumente)
+    e = einordnen.einordnen(m, daten.regelwerk(args.daten), daten.einstellungen(args.daten),
+                            steuerposten=daten.steuer_config(args.daten))
+    print('%s (%s)' % (e.aktion, e.grund))
     v = e.vorschlag if e.vorschlag is not None else e
     if v.thema:
-        print('thema=%s unterordner=%s personen=%s durch=%s'
-              % (v.thema, v.unterordner, ','.join(v.personen), v.durch))
+        print('thema=%s unterordner=%s personen=%s steuer=%s durch=%s'
+              % (v.thema, v.unterordner, ','.join(v.personen), ','.join(v.steuer), v.durch))
+    if e.treffer:
+        print('erkannt an: ' + regeln.treffer_text(e.treffer))
     return 0
 
 
@@ -56,8 +65,8 @@ def _mail_abruf(args):
     ablage = mail.Ablage(args.daten, args.konto, anhang_ziel=args.anhaenge)
     regelwerk = daten.regelwerk(args.daten)
     einst = daten.einstellungen(args.daten)
-    stufen = dict(lerner=daten.lerner(args.daten), einst=einst, ki=_ki(args.daten, einst),
-                  vertraege=daten.vertraege(args.daten))
+    stufen = dict(einst=einst, ki=_ki(args.daten, einst),
+                  steuerposten=daten.steuer_config(args.daten))
     if args.eml:
         mails = []
         for d in sorted(os.listdir(args.eml)):
@@ -112,8 +121,8 @@ def _vorschlagen(args):
     from . import mail
     einst = daten.einstellungen(args.daten)
     neu, fehler = mail.neue_vorschlaege(
-        args.daten, args.konto, _ki(args.daten, einst), daten.vertraege(args.daten),
-        daten.regelwerk(args.daten).get('standard_personen', []))
+        args.daten, args.konto, _ki(args.daten, einst), daten.regelwerk(args.daten),
+        daten.steuer_config(args.daten))
     print('%s: %d neue Vorschlaege, %d ohne Ergebnis' % (args.konto, neu, fehler))
     return 0
 
@@ -135,10 +144,46 @@ def _drive(args):
 
 
 def _regelvorschlaege(args):
+    from . import regeln
     for v in daten.regelvorschlaege_schreiben(args.daten):
-        print('%s: %s -> %s %s (%s)' % (v['name'], ','.join(v['absender']), v['thema'],
-                                        v.get('unterordner', ''), v['grund']))
+        print('%s: %s -> %s %s (%d passend, %d Konflikte; %s)' % (
+            v['name'], regeln.treffer_text([{'teil': b.get('teil', 'ueberall'),
+                                             'wert': ', '.join(b.get('werte') or [])}
+                                            for b in v.get('wenn') or []]),
+            (v.get('dann') or {}).get('thema', v.get('art')),
+            (v.get('dann') or {}).get('unterordner', ''), v.get('passt', 0),
+            len(v.get('konflikte') or []), v.get('grund', '')))
     return 0
+
+
+def _bestand(args):
+    n = daten.bestand_schreiben(args.daten)
+    print('Bestand: %d Eingaenge in %s' % (n, daten.BESTAND_DATEI))
+    return 0
+
+
+def _steuer(args):
+    from . import steuer
+    jahre = steuer.schreiben(args.daten, daten.steuerposten(args.daten))
+    print('Steuer: Uebersicht fuer %s' % (', '.join(map(str, jahre)) or 'kein Jahr'))
+    return 0
+
+
+def _konflikte(args):
+    """Alle Regeln gegen den Bestand pruefen: Regelkonflikte melden."""
+    from . import regeln
+    rw = daten.regelwerk(args.daten)
+    alle = daten.bestand(args.daten)
+    gesamt = 0
+    for r in rw.get('regeln') or []:
+        passt, konflikte = regeln.pruefen_gegen_bestand(r, rw, alle)
+        for e, namen in konflikte:
+            if r['name'] < min(namen):  # jeden Konflikt nur einmal
+                gesamt += 1
+                print('Konflikt %s / %s: %s %s' % (r['name'], ', '.join(namen),
+                                                   e.get('datum'), e.get('betreff')))
+    print('%d Regeln, %d Konflikte im Bestand' % (len(rw.get('regeln') or []), gesamt))
+    return 1 if gesamt and args.streng else 0
 
 
 def main(argv=None):
@@ -155,14 +200,28 @@ def main(argv=None):
     rg.add_argument('absender')
     rg.add_argument('betreff')
     rg.add_argument('--anhang', action='append', metavar='DATEINAME',
-                    help='Dateiname eines Anhangs, mehrfach moeglich')
+                    help='Anhang (Pfad, wird gelesen) oder Dateiname, mehrfach moeglich')
     rg.add_argument('--an', help='Empfaenger (An/Cc)')
+    rg.add_argument('--text', help='Mailtext')
     rg.set_defaults(fn=_einordnen)
 
     rv = sub.add_parser('regelvorschlaege',
-                        help='Regelentwuerfe aus gleich eingeordneten Notizen berechnen')
+                        help='Regelvorschlaege mit Beispielen und Konflikten aktualisieren')
     rv.add_argument('daten', help='Pfad zum Daten-Repo')
     rv.set_defaults(fn=_regelvorschlaege)
+
+    bs = sub.add_parser('bestand', help='index/bestand.jsonl fuer die Web-App schreiben')
+    bs.add_argument('daten', help='Pfad zum Daten-Repo')
+    bs.set_defaults(fn=_bestand)
+
+    st = sub.add_parser('steuer', help='Steueruebersicht steuer/<jahr>.json und .csv schreiben')
+    st.add_argument('daten', help='Pfad zum Daten-Repo')
+    st.set_defaults(fn=_steuer)
+
+    kf = sub.add_parser('konflikte', help='Regeln gegen den Bestand pruefen (Regelkonflikte)')
+    kf.add_argument('daten', help='Pfad zum Daten-Repo')
+    kf.add_argument('--streng', action='store_true', help='bei Konflikten mit Fehler beenden')
+    kf.set_defaults(fn=_konflikte)
 
     ma = sub.add_parser('mail-abruf', help='Mails abholen und ablegen (IMAP oder .eml-Ordner)')
     ma.add_argument('daten', help='Pfad zum Daten-Repo')
