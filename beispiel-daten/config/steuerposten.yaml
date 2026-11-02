@@ -1,0 +1,23 @@
+# Steuerposten: Person · Anlage · Objekt · Posten (ADR 0004). Schluessel werden in
+# Notizen (steuer: [...]) und Regeln (dann.steuer) benutzt. Keine Zeilennummern,
+# die aendern sich jedes Jahr. Anlagen: N, V, KAP, R, SA, VOR, AB, 35a, USt, EÜR.
+posten:
+  anna.n.arbeitsmittel:
+    person: anna
+    anlage: N
+    posten: Arbeitsmittel
+  anna.vor.kfz-haftpflicht:
+    person: anna
+    anlage: VOR
+    objekt: auto
+    posten: Kfz-Haftpflicht
+  anna.35a.handwerker:
+    person: anna
+    anlage: 35a
+    objekt: haus
+    posten: Handwerkerleistungen (Lohnanteil)
+# Fester Steuerbezug je Ordner: "thema" oder "thema/unterordner"; Unterebenen erben.
+ordner:
+  edv/hoster: [anna.n.arbeitsmittel]
+# Neue Posten, die die KI vorschlaegt; gelten erst nach Uebernahme in "posten".
+vorschlaege: []
