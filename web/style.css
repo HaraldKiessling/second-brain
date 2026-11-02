@@ -162,3 +162,14 @@ ul.ordnerbaum li { display: flex; align-items: center; justify-content: space-be
 }
 a { color: var(--akzent); }
 [hidden] { display: none !important; }
+.karte.regel { margin: 8px 0; }
+.karte.regel > div { margin: 2px 0; }
+.bedingung { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
+.bedingung select, .bedingung input { flex: 1 1 160px; margin: 0; }
+.bedingung button { flex: 0 0 auto; }
+.pruefung { margin: 8px 0; padding: 8px; border-left: 3px solid var(--linie); font-size: 14px; }
+.pruefung ul, details.beispiele ul { margin: 4px 0; padding-left: 18px; font-size: 14px; }
+details.beispiele summary { cursor: pointer; color: var(--akzent); font-size: 14px; }
+#steuer h4 { margin: 12px 0 4px; }
+#steuer details summary { cursor: pointer; }
+#steuer .knoepfe { gap: 12px; }
