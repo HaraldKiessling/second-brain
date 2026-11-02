@@ -36,6 +36,7 @@
     <nav id="reiter" hidden>
       <button data-reiter="start" class="aktiv">Zu erledigen</button>
       <button data-reiter="mails">Alle Mails</button>
+      <button data-reiter="steuer">Steuer</button>
       <button data-reiter="einrichtung" class="zahnrad" title="Einrichtung">⚙ Einrichtung</button>
     </nav>
 
@@ -85,11 +86,17 @@
       <div id="mails-liste"></div>
     </section>
 
+    <section id="steuer" class="reiter" hidden>
+      <p>Alle Belege mit Steuerbezug, je Jahr und Person nach Anlage und Posten. Das Jahr ist das Jahr der Zahlung. Beträge liest das System aus Mail und Anhang; fehlt einer, steht „ohne Betrag“ dabei.</p>
+      <label>Jahr <select id="steuer-jahr"></select></label>
+      <div id="steuer-inhalt"></div>
+      <div id="posten-vorschlaege"></div>
+    </section>
+
     <section id="einrichtung" class="reiter" hidden>
       <h2>Einrichtung</h2>
       <nav id="unterreiter">
         <button data-teil="regeln" class="aktiv">Regeln</button>
-        <button data-teil="vertraege">Verträge</button>
         <button data-teil="ordner">Ordner</button>
         <button data-teil="personen">Personen</button>
         <button data-teil="zugang">Zugangsdaten</button>
@@ -98,53 +105,48 @@
       </nav>
 
       <div id="teil-regeln" class="teil">
-      <p>Passt eine Regel auf Absender, Empfänger oder Betreff (alle angegebenen müssen passen), wird eine Mail mit Dokument ohne Rückfrage abgelegt. Muster sind Wortteile, Groß-/Kleinschreibung egal.</p>
-        <table><thead><tr><th>Name</th><th>Absender enthält</th><th>Empfänger enthält</th><th>Betreff enthält</th><th>Ordner in Drive</th><th>Personen</th><th></th></tr></thead><tbody id="regel-liste"></tbody></table>
+        <p>Eine Regel sagt: <strong>Wenn</strong> die Mail bestimmte Bestandteile hat (Absender, Empfänger, Betreff, Mailtext, Name oder Text des Anhangs), <strong>dann</strong> kommt sie in diesen Ordner, mit diesen Merkmalen. Auf jede Mail darf nur eine Ordnerregel passen. Passen zwei, landet die Mail in „Zu erledigen“, und die Regeln müssen nachgeschärft werden.</p>
+        <p class="hinweis">Am besten erkennt eine Regel eine Mail an einer gleichbleibenden Nummer (Vertrags-, Kunden- oder Mitgliedsnummer), die auch im Ordnernamen steht. Trennzeichen in Nummern sind egal. Wörter werden nur als ganzes Wort gefunden, Groß- und Kleinschreibung und Umlaute sind egal.</p>
+        <div id="regel-liste"></div>
         <button id="regel-neu">Neue Regel</button>
-        <div id="vorschlag-bereich" hidden>
-          <h3>Regelvorschläge</h3>
-          <p class="hinweis">Absender, deren Mails schon mehrmals gleich eingeordnet wurden. Mit einer Regel landen sie künftig ohne Rückfrage.</p>
-          <table><thead><tr><th>Absender</th><th>Thema</th><th>Unterordner</th><th>Warum</th><th></th></tr></thead><tbody id="vorschlag-liste"></tbody></table>
-        </div>
-        <form id="regel-form" hidden>
+        <form id="regel-form" class="karte" hidden>
           <h3 id="regel-form-titel">Regel</h3>
-          <label>Name <input name="name" required></label>
-          <label>Absender enthält (mit Komma trennen) <input name="absender"></label>
-          <label>Empfänger (An/Cc) enthält (mit Komma trennen) <input name="empfaenger"></label>
-          <label>Betreff enthält (mit Komma trennen) <input name="betreff"></label>
-          <label><input type="checkbox" name="ohne_anhang" style="display:inline;width:auto"> auch Mails ohne Anhang als Notiz ablegen</label>
-          <label><input type="checkbox" name="mail_drive" style="display:inline;width:auto"> Mail zusätzlich als PDF in den Drive-Ordner legen</label>
-          <label>Thema <select name="thema" required></select></label>
-          <label>Unterordner in der Ablage <input name="unterordner" placeholder="z. B. ionos/rechnungen/{jahr}"></label>
-          <p class="hinweis" id="regel-pfad"></p>
-          <fieldset><legend>Personen</legend><div id="regel-personen"></div></fieldset>
-          <div id="regel-bezuege"></div>
+          <div class="reihe">
+            <label>Name <input name="name" required placeholder="z. B. huk-kfz"></label>
+            <label>Was die Regel tut
+              <select name="art">
+                <option value="ordner">Ordner bestimmen</option>
+                <option value="merkmal">Nur Merkmale ergänzen (Person, Steuer …)</option>
+                <option value="aussortieren">Aussortieren (Werbung)</option>
+              </select>
+            </label>
+          </div>
+          <fieldset><legend>Wenn (alle Bedingungen müssen zutreffen, bei mehreren Werten reicht einer)</legend>
+            <div id="regel-bedingungen"></div>
+            <button type="button" id="regel-bedingung-neu" class="klein leise">+ Bedingung</button>
+          </fieldset>
+          <div id="regel-ordner">
+            <label>Thema <select name="thema"></select></label>
+            <label>Unterordner in der Ablage <input name="unterordner" placeholder="z. B. 07HUK_Kfz_624_220429-P oder ionos/{jahr}"></label>
+            <p class="hinweis" id="regel-pfad"></p>
+          </div>
+          <div id="regel-merkmale">
+            <fieldset><legend>Personen (leer = vorausgewählte)</legend><div id="regel-personen"></div></fieldset>
+            <div id="regel-bezuege"></div>
+            <label><input type="checkbox" name="ohne_anhang" style="display:inline;width:auto"> auch Mails ohne Anhang als Notiz ablegen</label>
+            <label><input type="checkbox" name="mail_drive" style="display:inline;width:auto"> Mail zusätzlich als PDF in den Drive-Ordner legen</label>
+          </div>
+          <div id="regel-pruefung" class="pruefung"></div>
           <button type="submit">Speichern</button>
           <button type="button" id="regel-abbrechen" class="leise">Abbrechen</button>
           <p id="regel-fehler" class="fehler"></p>
         </form>
-        <h3>Immer aussortieren (Spam, Newsletter)</h3>
-        <p class="hinweis">Ein Absender oder Wortteil pro Zeile. Solche Mails bleiben nur gemerkt.</p>
-        <textarea id="verwerfen" rows="8"></textarea>
-        <button id="verwerfen-speichern">Speichern</button>
-      </div>
-
-      <div id="teil-vertraege" class="teil" hidden>
-        <p class="hinweis">Steht eine dieser Vertragsnummern in einer Mail, wird sie ohne Rückfrage in den Ordner des Vertrags gelegt. Trennzeichen in der Nummer sind egal.</p>
-        <div id="vertrag-liste"></div>
-        <button id="vertrag-neu">Neuer Vertrag</button>
-        <form id="vertrag-form" class="karte" hidden>
-          <h3 id="vertrag-form-titel">Vertrag</h3>
-          <div class="reihe">
-            <label>Vertragsnummer <input name="nummer" required placeholder="z. B. 624/220429-P"></label>
-            <label>Bezeichnung <input name="name" placeholder="z. B. HUK Kfz-Versicherung"></label>
-          </div>
-          <label>Weitere Schreibweisen der Nummer (mit Komma trennen) <input name="auch"></label>
-          <div id="vertrag-ordner"></div>
-          <button type="submit">Speichern</button>
-          <button type="button" id="vertrag-abbrechen" class="leise">Abbrechen</button>
-          <p id="vertrag-fehler" class="fehler"></p>
-        </form>
+        <div id="vorschlag-bereich" hidden>
+          <h3>Regelvorschläge</h3>
+          <p class="hinweis">Aus deinem Bestand (Drive-Ordner, abgelegte Mails) und aus Mails, die du zweimal gleich abgelegt hast. Jeder Vorschlag zeigt die bisherigen Mails, auf die er passen würde. <span id="vorschlag-zahl"></span></p>
+          <button id="vorschlag-alle" type="button" hidden>Alle ohne Konflikt übernehmen</button>
+          <div id="vorschlag-liste"></div>
+        </div>
       </div>
 
       <div id="teil-ordner" class="teil" hidden>
@@ -211,9 +213,8 @@
           <select id="datei-wahl">
             <option>config/einordnen.yaml</option>
             <option>config/themen.yaml</option>
-            <option>config/ablagewissen.yaml</option>
             <option>config/bezuege.yaml</option>
-            <option>config/vertraege.yaml</option>
+            <option>config/steuerposten.yaml</option>
             <option>config/ordner.yaml</option>
             <option>config/personen.yaml</option>
             <option>regeln/mail.json</option>

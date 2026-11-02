@@ -1,38 +1,34 @@
-"""Einordnen in Stufen: jede Mail bekommt eine Entscheidung mit Konfidenz.
+"""Einordnen in Stufen (ADR 0004): jeder Eingang bekommt eine Entscheidung.
 
-Stufen (die erste, die sicher genug ist, gewinnt):
-  1. Regel        - feste Regel aus regeln/mail.json, Konfidenz 1,0
-  2. Spam         - Spam-Wert aus Mail-Kopf und Betreff; ab spam_schwelle
-                    verworfen (bleibt aber als Indexeintrag mit Grund erhalten)
-  3. Heuristik    - Lernen aus vorhandenen Notizen (gleicher Absender, gleiche
-                    Domain), Ablagewissen (bekannte Gegenparteien aus Drive-Ablage
-                    und Steuererklaerungen, config/ablagewissen.yaml) und
-                    Stichwoerter der Themen
-  4. KI           - optional (config/einordnen.yaml ki.aktiv), nur wenn die
-                    Heuristik nicht reicht
-  5. Rueckfrage   - unter der Schwelle: Eingang mit Vorschlag
+  1. Spam      - Spam-Wert aus Mail-Kopf und Betreff; ab spam_schwelle
+                 verworfen (bleibt als Indexeintrag mit Grund auffindbar).
+                 Passt eine Regel, gilt die Regel.
+  2. Regel     - genau eine Ordner- oder Aussortier-Regel passt (regeln.py):
+                 Notiz bzw. verworfen, ohne Rueckfrage. Passen mehrere, ist
+                 das ein Regelkonflikt: Eingang mit allen passenden Regeln.
+  3. KI        - optional (config/einordnen.yaml ki.aktiv): Vorschlag mit
+                 Ordner, Merkmalen und Steuerposten. Ohne Regel wird nie ohne
+                 Haralds Freigabe abgelegt: der Eingang kommt mit Vorschlag
+                 nach "Zu erledigen".
 
-Notiz oder Eingang wird nur eine Mail mit Dokument-Anhang (wie in der
-bisherigen Ablage); ohne Dokument bleibt es beim Indexeintrag, es sei denn,
-eine Regel erlaubt es ausdruecklich (ohne_anhang: true), die Mail kommt
-von einer eigenen Adresse (eigene_adressen): was Harald sich selbst schickt,
-will er erfasst haben, oder Harald hat schon eine Mail dieses Absenders ohne
-Anhang abgelegt (gelernt). Sonst fragt die KI, ob die Mail wichtig ist
-(Buchung, Vertrag, Termin ...); dann kommt sie mit Vorschlag in den Eingang.
+Merkmalregeln (Personen, Steuer ...) gelten fuer Regel- und KI-Ergebnis.
 
-Ob die Mail selbst als PDF nach Drive soll (mail_drive), lernt die Heuristik
-aus den bisherigen Notizen desselben Absenders; Regeln und KI koennen es
-ebenfalls vorschlagen.
+Notiz oder Eingang wird nur ein Eingang mit Dokument-Anhang; ohne Dokument
+bleibt es beim Indexeintrag, es sei denn, eine Regel erlaubt es
+(ohne_anhang), die Mail kommt von einer eigenen Adresse (eigene_adressen),
+oder die KI haelt sie fuer wichtig (dann mit Vorschlag in den Eingang).
+
+Gelernt wird nur ueber Regelvorschlaege (regelvorschlaege()): Hat Harald
+mindestens zweimal Gleiches abgelegt, entsteht ein Regelentwurf, der in der
+Web-App mit den passenden Eingaengen gezeigt wird.
 
 Die Einstellungen stehen in config/einordnen.yaml (siehe STANDARD).
 """
 
 import email.utils
 import json
-import os
 import re
 import urllib.request
-from collections import Counter
 from dataclasses import dataclass, field
 
 from . import notiz as nz
@@ -166,7 +162,7 @@ def spam_wert(kopf, absender, betreff, hat_dokument=False, bekannt=False,
     return max(0.0, min(1.0, wert)), gruende
 
 
-# --- Heuristik: Lernen aus vorhandenen Notizen -----------------------------
+# --- Beispiele aus vorhandenen Notizen (fuer KI und Regelvorschlaege) ------
 
 @dataclass
 class Beispiel:
@@ -178,6 +174,11 @@ class Beispiel:
     durch: str = ''  # eingeordnet_durch der Notiz
     ohne_anhang: bool = False  # Mail ohne Dokument, trotzdem abgelegt
     mail_drive: bool = False   # Mail selbst als PDF in Drive
+    id: str = ''
+    text: str = ''
+    anhaenge: tuple = ()
+    steuer: tuple = ()
+    objekte: tuple = ()
 
 
 def _absender_aus_text(text):
@@ -197,7 +198,7 @@ def unterordner_aus_ablage(ablage, thema_ablage, jahr=None):
 
 
 def beispiele_aus_notizen(pfade, themen):
-    """Lernbeispiele aus Notizen mit bekanntem Absender."""
+    """Beispiele aus Notizen mit bekanntem Absender."""
     beispiele = []
     for pfad in pfade:
         with open(pfad, encoding='utf-8') as fh:
@@ -213,220 +214,109 @@ def beispiele_aus_notizen(pfade, themen):
         jahr = getattr(m.get('erstellt'), 'year', None)
         uo = unterordner_aus_ablage(m.get('ablage'),
                                     themen.get(thema, {}).get('ablage', ''), jahr)
-        ohne = bool(m.get('ohne_anhang'))
         beispiele.append(Beispiel(a, n.titel, thema, uo, tuple(m.get('personen') or ()),
-                                  str(m.get('eingeordnet_durch') or ''), ohne,
-                                  bool(m.get('mail_drive'))))
+                                  str(m.get('eingeordnet_durch') or ''),
+                                  bool(m.get('ohne_anhang')), bool(m.get('mail_drive')),
+                                  str(m.get('id') or ''), n.text,
+                                  tuple(str(x) for x in m.get('anhaenge') or ()),
+                                  tuple(m.get('steuer') or ()), tuple(m.get('objekte') or ())))
     return beispiele
 
 
-def regelvorschlaege(beispiele, regelwerk, eigene=(), abgelehnt=(), mindestens=2):
-    """Regelentwuerfe fuer Absender-Domains, die schon mehrmals gleich
-    eingeordnet wurden (von Harald, Heuristik oder KI), aber noch keine Regel
-    haben. Uneinheitliche Domains bekommen keinen Vorschlag."""
+ZIFFERNFOLGE = re.compile(r'[a-z0-9]*\d[a-z0-9]*(?:[\s/._-]+[a-z0-9]*\d[a-z0-9]*)*', re.I)
+
+
+def nummern(text):
+    """Nummern ab 6 Ziffern, so wie sie dastehen (624/220429-P, 702213446-Y-16)."""
+    gefunden = set()
+    for m in ZIFFERNFOLGE.finditer(str(text or '')):
+        z = m.group(0).strip(' /._-')
+        if sum(ch.isdigit() for ch in z) >= 6:
+            gefunden.add(z)
+    return gefunden
+
+
+def _gemeinsame_nummer(gruppe, uo):
+    """Eine Nummer, die in allen Beispielen der Gruppe steht, bevorzugt eine aus
+    dem Unterordner (Vertragsnummer im Ordnernamen)."""
+    def norm(z):
+        return re.sub(r'[^a-z0-9]', '', z.lower())
+    je = [{norm(z): z for z in nummern(' '.join([b.betreff, b.text] + list(b.anhaenge)))}
+          for b in gruppe]
+    if not je:
+        return ''
+    gemeinsam = set(je[0]).intersection(*je[1:])
+    im_ordner = [z for z in gemeinsam if z in norm(uo)]
+    wahl = sorted(im_ordner or gemeinsam, key=len, reverse=True)
+    return je[0][wahl[0]] if wahl else ''
+
+
+def regelvorschlaege(beispiele, regelwerk, eigene=(), abgelehnt=(), mindestens=2, bestand=()):
+    """Regelentwuerfe (Format regeln.py) fuer Gruppen, die schon mindestens
+    zweimal gleich eingeordnet wurden, aber von keiner Regel erfasst sind.
+    Bedingung: eine gemeinsame Nummer (bevorzugt), sonst die Absender-Domain.
+    Jeder Entwurf traegt die Eingaenge des Bestands, auf die er passt, und
+    Regelkonflikte mit vorhandenen Regeln."""
     eigene = {e.lower() for e in eigene}
     gruppen = {}
     for b in beispiele:
         d = b.adresse.split('@', 1)[-1]
-        if b.durch.startswith('regel/') or b.adresse in eigene or d in FREEMAIL:
+        if b.durch.startswith('regel/') or b.adresse in eigene:
             continue
-        gruppen.setdefault(d, []).append(b)
+        schluessel = (b.thema, b.unterordner)
+        gruppen.setdefault(schluessel, []).append(b)
     vorschlaege = []
-    for d, gruppe in sorted(gruppen.items()):
-        labels = {(b.thema, b.unterordner, b.personen) for b in gruppe}
-        if len(gruppe) < mindestens or len(labels) != 1 or d in abgelehnt:
+    namen = {r.get('name') for r in regelwerk.get('regeln') or []}
+    for (thema, uo), gruppe in sorted(gruppen.items()):
+        if len(gruppe) < mindestens:
             continue
-        if regeln.einordnen('x@' + d, '', True, regelwerk).aktion == regeln.NOTIZ:
+        nummer = _gemeinsame_nummer(gruppe, uo)
+        domains = {b.adresse.split('@', 1)[-1] for b in gruppe}
+        if nummer and regeln.nummer_muster(nummer):
+            wenn = [{'teil': 'ueberall', 'vergleich': 'nummer', 'werte': [nummer]}]
+            grund = 'Nummer %s in %d abgelegten Mails' % (nummer, len(gruppe))
+        elif len(domains) == 1 and not (domains & FREEMAIL):
+            d = domains.pop()
+            wenn = [{'teil': 'absender', 'vergleich': 'wort', 'werte': [d]}]
+            grund = '%d Mails von %s, alle gleich abgelegt' % (len(gruppe), d)
+        else:
             continue
-        thema, uo, personen = labels.pop()
-        name = d.rsplit('.', 2)[-2] if d.count('.') else d
-        vorschlag = {'name': name, 'absender': [d], 'thema': thema,
-                     'personen': list(personen),
-                     'grund': '%d Notizen von %s, alle gleich eingeordnet' % (len(gruppe), d)}
-        if uo:
-            vorschlag['unterordner'] = uo
+        basis = re.sub(r'[^a-z0-9]+', '-', regeln.falten(uo.split('/')[-1] or thema)).strip('-')
+        name = basis or thema
+        i = 2
+        while name in namen:
+            name, i = '%s-%d' % (basis, i), i + 1
+        if name in abgelehnt or any(a == wenn[0]['werte'][0] for a in abgelehnt):
+            continue
+        personen = sorted({p for b in gruppe for p in b.personen})
+        dann = {'thema': thema, 'unterordner': uo, 'personen': personen}
         if all(b.ohne_anhang for b in gruppe):
-            vorschlag['ohne_anhang'] = True
+            dann['ohne_anhang'] = True
         if all(b.mail_drive for b in gruppe):
-            vorschlag['mail_drive'] = True
-        vorschlaege.append(vorschlag)
+            dann['mail_drive'] = True
+        steuer = set.intersection(*[set(b.steuer) for b in gruppe])
+        if steuer:
+            dann['steuer'] = sorted(steuer)
+        regel = {'name': name, 'art': 'ordner', 'wenn': wenn, 'dann': dann}
+        # Schon von einer Regel erfasst? Dann kein Vorschlag.
+        teile = regeln.Teile(absender=gruppe[0].adresse, betreff=gruppe[0].betreff,
+                             text=gruppe[0].text, anhangname=' '.join(gruppe[0].anhaenge))
+        if regeln.auswerten(teile, regelwerk).ziel:
+            continue
+        vorschlaege.append(dict(regel, grund=grund, herkunft='abgelegt',
+                                **bestand_pruefung(regel, regelwerk, bestand)))
+        namen.add(name)
     return vorschlaege
 
 
-# --- Vertragsnummern in Ordnernamen ----------------------------------------
-# Viele Ablageordner tragen die Vertrags- oder Kontonummer im Namen
-# (01HUK_Hausrat_702_213446, 07HUK_Kfz_624_220429-P). Steht in der Mail eine
-# solche Nummer, passt genau der Ordner mit derselben Nummer; ein Ordner mit
-# einer anderen Nummer ist fast sicher falsch.
-
-ZIFFERNFOLGE = re.compile(r'\d(?:[\s/._-]*\d)+')
-MIN_NUMMER = 6
-
-
-def nummern(text):
-    """Ziffernfolgen ab 6 Stellen, Trennzeichen entfernt (624/220429 -> 624220429)."""
-    roh = (re.sub(r'\D', '', z) for z in ZIFFERNFOLGE.findall(str(text or '')))
-    return {z for z in roh if len(z) >= MIN_NUMMER}
-
-
-def nummer_pruefen(v, betreff, text='', anhaenge=()):
-    """Vorschlag (und Alternativen) gegen Nummern in der Mail abgleichen: passende
-    Ordnernummer hebt, eine andere als die im Betreff senkt die Konfidenz deutlich.
-    Liefert den besten Vorschlag (die Reihenfolge kann sich aendern)."""
-    if v is None:
-        return None
-    im_betreff = nummern(betreff) | nummern(' '.join(anhaenge))
-    ueberall = im_betreff | nummern(text)
-    alle = [v] + list(v.alternativen)
-    geaendert = False
-    for x in alle:
-        eigene = nummern(x.unterordner)
-        if not eigene:
-            continue
-        if eigene & ueberall:
-            x.konfidenz = max(x.konfidenz, 0.9)
-            x.grund += '; Vertragsnummer passt'
-            geaendert = True
-        elif im_betreff:
-            x.konfidenz = min(x.konfidenz, 0.15)
-            x.grund += '; andere Vertragsnummer als im Betreff (%s)' % ', '.join(sorted(im_betreff))
-            geaendert = True
-    if not geaendert:
-        return v
-    alle.sort(key=lambda x: -x.konfidenz)
-    for x in alle:
-        x.alternativen = []
-    alle[0].alternativen = alle[1:]
-    return alle[0]
-
-
-class Lerner:
-    """Schlaegt Thema, Unterordner und Personen aus frueheren Notizen vor.
-
-    Konfidenz = Uebereinstimmungen / (Beispiele + 0,5): eine Notiz desselben
-    Absenders ergibt 0,67, zwei gleiche 0,8, drei 0,86. Gleiche Domain zaehlt
-    85 %. Ablagewissen (0,7) und Stichwoerter (0,45) bleiben unter der
-    Standardschwelle: sie liefern einen guten Vorschlag, die erste Mail wird
-    aber bestaetigt. Der spezifischste Hinweis gewinnt; stuetzt ein weiterer
-    Hinweis dasselbe Thema, kommen 0,15 hinzu. So reicht eine Bestaetigung
-    eines Ablagewissen-Vorschlags, sonst zwei gleiche Entscheidungen.
-    """
-
-    def __init__(self, beispiele, themen, standard_personen=(), wissen=(), eigene=(), ordner=None):
-        self.themen = themen
-        self.ordner = ordner or {}  # thema -> bekannte Unterordner (Ordnerliste)
-        # Eigene Adressen sagen nichts ueber das Thema: daraus nicht lernen
-        eigene = {e.lower() for e in eigene}
-        beispiele = [b for b in beispiele if b.adresse not in eigene]
-        self.standard_personen = list(standard_personen)
-        self.wissen = list(wissen)
-        self.nach_adresse = {}
-        self.nach_domain = {}
-        for b in beispiele:
-            self.nach_adresse.setdefault(b.adresse, []).append(b)
-            d = b.adresse.split('@', 1)[-1]
-            if d not in FREEMAIL:
-                self.nach_domain.setdefault(d, []).append(b)
-
-    def kennt(self, absender):
-        return adresse(absender) in self.nach_adresse or domain(absender) in self.nach_domain
-
-    def _gruppe(self, absender):
-        return (self.nach_adresse.get(adresse(absender))
-                or self.nach_domain.get(domain(absender)) or [])
-
-    def wichtig_ohne_anhang(self, absender):
-        """Hat Harald schon eine Mail dieses Absenders (sonst der Domain) ohne
-        Anhang abgelegt? Dann ist auch die naechste wichtig."""
-        return any(b.ohne_anhang for b in self._gruppe(absender))
-
-    @staticmethod
-    def _mehrheit(gruppe, faktor, durch, wer):
-        zaehler = Counter((b.thema, b.unterordner, b.personen) for b in gruppe)
-        (thema, uo, personen), k = zaehler.most_common(1)[0]
-        gleich = [b for b in gruppe if (b.thema, b.unterordner, b.personen) == (thema, uo, personen)]
-        return Vorschlag(thema=thema, unterordner=uo, personen=list(personen),
-                         konfidenz=faktor * k / (len(gruppe) + 0.5), durch=durch,
-                         grund='%d von %d Notizen von %s' % (k, len(gruppe), wer),
-                         mail_drive=2 * sum(b.mail_drive for b in gleich) > len(gleich))
-
-    def _nach_nummer(self, betreff, text, anhaenge):
-        """Bekannter Ordner, dessen Nummer in der Mail steht (genau einer)."""
-        inhalt = nummern(betreff) | nummern(text) | nummern(' '.join(anhaenge))
-        if not inhalt:
-            return None
-        treffer = {(t, str(uo)) for t, liste in self.ordner.items() for uo in liste
-                   if nummern(uo) & inhalt}
-        if len(treffer) != 1:
-            return None
-        t, uo = treffer.pop()
-        return Vorschlag(thema=t, unterordner=uo, personen=list(self.standard_personen),
-                         konfidenz=0.9, durch='heuristik/vertragsnummer',
-                         grund='Nummer aus der Mail im Ordnernamen')
-
-    def vorschlag(self, absender, betreff, anhaenge=(), text=''):
-        v = self._vorschlag(absender, betreff, anhaenge)
-        n = self._nach_nummer(betreff, text, anhaenge)
-        if n is not None and (v is None or (v.thema, v.unterordner) != (n.thema, n.unterordner)):
-            if v is not None:
-                n.alternativen = [v]
-            v = n
-        return nummer_pruefen(v, betreff, text, anhaenge)
-
-    def _vorschlag(self, absender, betreff, anhaenge=()):
-        a, d = adresse(absender), domain(absender)
-        gelernt = None  # aus eigenen Entscheidungen: Absender vor Domain
-        if a in self.nach_adresse:
-            gelernt = self._mehrheit(self.nach_adresse[a], 1.0, 'heuristik/absender', a)
-        elif d in self.nach_domain:
-            gelernt = self._mehrheit(self.nach_domain[d], 0.85, 'heuristik/domain', d)
-        wissen = (self._ablagewissen(absender, betreff, anhaenge)
-                  + self._stichwoerter(betreff))
-        if gelernt is None:
-            return max(wissen, key=lambda w: w.konfidenz) if wissen else None
-        # Eigene Entscheidungen gehen vor; stuetzt das Wissen dasselbe Thema,
-        # steigt die Konfidenz.
-        stuetze = next((w for w in wissen if w.thema == gelernt.thema), None)
-        if stuetze is not None:
-            gelernt.konfidenz = min(0.95, gelernt.konfidenz + 0.15)
-            gelernt.grund += '; passt zu ' + stuetze.grund
-        return gelernt
-
-    def _ablagewissen(self, absender, betreff, anhaenge):
-        text = ' '.join([absender or '', betreff or ''] + list(anhaenge)).lower()
-        treffer = []
-        for w in self.wissen:
-            gefunden = [str(m) for m in w.get('muster') or [] if str(m).lower() in text]
-            if gefunden:
-                treffer.append((len(gefunden), w, gefunden))
-        if not treffer:
-            return []
-        treffer.sort(key=lambda t: -t[0])
-        n, w, gefunden = treffer[0]
-        label = lambda x: (x['thema'], x.get('unterordner', ''))
-        mehrdeutig = any(m == n and label(x) != label(w) for m, x, _ in treffer[1:])
-        return [Vorschlag(thema=w['thema'], unterordner=w.get('unterordner', ''),
-                          personen=list(w.get('personen') or self.standard_personen),
-                          konfidenz=0.4 if mehrdeutig else 0.7,
-                          durch='heuristik/ablagewissen',
-                          grund='bekannt aus %s: %s' % (w.get('quelle', 'Ablage'),
-                                                        w.get('name') or ', '.join(gefunden)))]
-
-    def _stichwoerter(self, betreff):
-        be = (betreff or '').lower()
-        treffer = []
-        for slug, t in self.themen.items():
-            woerter = [w for w in (t.get('stichwoerter') or []) if w.lower() in be]
-            if woerter:
-                treffer.append((len(woerter), slug, woerter))
-        if not treffer:
-            return []
-        treffer.sort(reverse=True)
-        n, slug, woerter = treffer[0]
-        konf = 0.45 if len(treffer) == 1 else 0.3
-        return [Vorschlag(thema=slug, personen=list(self.standard_personen),
-                          konfidenz=konf, durch='heuristik/stichwort',
-                          grund='Stichwort im Betreff: ' + ', '.join(woerter))]
+def bestand_pruefung(regel, regelwerk, bestand, wie_viele=8):
+    """Beispiele und Regelkonflikte einer (neuen) Regel im Bestand."""
+    passt, konflikte = regeln.pruefen_gegen_bestand(regel, regelwerk, bestand)
+    kurz = lambda e: {k: e.get(k) for k in ('id', 'datum', 'absender', 'betreff', 'ziel')
+                      if e.get(k)}
+    return {'passt': len(passt), 'beispiele': [kurz(e) for e in passt[:wie_viele]],
+            'konflikte': [dict(kurz(e), regeln=n) for e, n in konflikte[:wie_viele]],
+            'wert_im_ordner': regeln.wert_im_ordner(regel)}
 
 
 # --- KI (optional) ---------------------------------------------------------
@@ -446,7 +336,7 @@ class KI:
 
     def __init__(self, schluessel, modell, themen, personen, max_anfragen=20,
                  senden=None, hinweise='', unterordner=None, beispiele=(),
-                 objekte=None, steuer=None, vertraege=()):
+                 objekte=None, steuer=None):
         self.schluessel = schluessel
         self.modell = modell
         self.themen = themen
@@ -458,7 +348,6 @@ class KI:
         self.beispiele = self._auswahl(beispiele)
         self.objekte = objekte or {}    # schluessel -> {name: ...}
         self.steuer = steuer or {}      # schluessel -> {name: ...}
-        self.vertraege = list(vertraege or ())
         self._senden = senden or self._http
 
     def _http(self, nutzlast):
@@ -482,7 +371,7 @@ class KI:
         return auswahl[:cls.BEISPIELE]
 
     def _prompt(self, absender, betreff, text, anhaenge, empfaenger='', ohne_dokument=False,
-                hinweis=''):
+                hinweis='', anhangtext=''):
         zeilen = []
         for s, t in self.themen.items():
             z = '- %s (Ordner %s): %s' % (s, t.get('ablage', ''), t.get('zweck') or t.get('name', s))
@@ -491,17 +380,13 @@ class KI:
             zeilen.append(z)
         hinweise = ('Ablageregeln des Haushalts:\n%s\n\n' % self.hinweise.strip()
                     if self.hinweise.strip() else '')
-        if self.vertraege:
-            hinweise += 'Bekannte Vertraege (Nummer: Bezeichnung -> Thema/Unterordner):\n%s\n\n' % (
-                '\n'.join('- %s: %s -> %s%s' % (v.get('nummer'), v.get('name', ''), v.get('thema'),
-                                                 '/' + v['unterordner'] if v.get('unterordner') else '')
-                          for v in self.vertraege[:40]))
         if self.objekte or self.steuer:
             hinweise += (
                 'Ein Beleg kann mehrere Bezuege haben. Nenne je Vorschlag zusaetzlich, falls '
                 'passend: "weitere_themen" (andere Themen-Slugs, unter denen man die Mail auch '
                 'sucht), "objekte" (worauf sie sich bezieht) und "steuer" (fuer welche Steuer-'
-                'Angabe sie zaehlt).\nObjekte: %s\nSteuerbezuege: %s\n\n' % (
+                'Angabe sie zaehlt; nur Schluessel aus der Liste der Steuerposten, Person beachten).'
+                '\nObjekte: %s\nSteuerposten: %s\n\n' % (
                     ', '.join('%s (%s)' % (k, (o or {}).get('name', k)) for k, o in self.objekte.items()),
                     ', '.join('%s (%s)' % (k, (o or {}).get('name', k)) for k, o in self.steuer.items())))
         if hinweis:
@@ -537,8 +422,10 @@ class KI:
             'Ordne diese Mail in ein persoenliches Archiv ein. Das Thema ist der '
             'Ordner der Ablage; ein Unterordner ist optional und darf mehrere Ebenen '
             'haben (mit / getrennt). Bevorzuge einen der genannten Unterordner; passt '
-            'keiner, schlage einen neuen im Stil der vorhandenen vor (Nummer, Anbieter, '
-            'Sparte, Vertragsnummer), moeglichst unter einer passenden vorhandenen Ebene. '
+            'keiner, schlage einen neuen vor: Name der Gegenpartei und eine gleichbleibende '
+            'Nummer aus der Mail (Vertrags-, Kunden- oder Mitgliedsnummer, nie eine '
+            'Rechnungsnummer), z. B. "HUK_Kfz_624_220429-P", moeglichst unter einer '
+            'passenden vorhandenen Ebene. '
             'Erfinde keine Themen.\n'
             'Themen:\n%s\nPersonen: %s\n\n%s'
             'Wenn mehrere Ordner in Frage kommen, nenne bis zu drei, den besten zuerst, '
@@ -549,9 +436,10 @@ class KI:
             '"unterordner": "<Pfad oder leer>", "personen": ["<slug>"], '
             '"weitere_themen": ["<slug>"], "objekte": ["<slug>"], "steuer": ["<slug>"], '
             '"konfidenz": <0 bis 1>, "grund": "<ein Satz>"}]}\n\n'
-            'Absender: %s\nEmpfaenger: %s\nBetreff: %s\nAnhaenge: %s\n\n%s'
+            'Absender: %s\nEmpfaenger: %s\nBetreff: %s\nAnhaenge: %s\n\n%s%s'
             % ('\n'.join(zeilen), ', '.join(sorted(self.personen)), hinweise, absender,
-               empfaenger, betreff, ', '.join(anhaenge) or 'keine', (text or '')[:1500]))
+               empfaenger, betreff, ', '.join(anhaenge) or 'keine', (text or '')[:1500],
+               '\n\nText der Anhaenge:\n' + anhangtext[:2500] if anhangtext else ''))
 
     def _vorschlag(self, d, durch):
         thema = d.get('thema') or ''
@@ -576,7 +464,7 @@ class KI:
                          steuer=auswahl('steuer', self.steuer))
 
     def frage(self, absender, betreff, text, anhaenge=(), empfaenger='', ohne_dokument=False,
-              hinweis=''):
+              hinweis='', anhangtext=''):
         """Vorschlag oder None (Budget aufgebraucht, Fehler, unbrauchbare Antwort;
         ohne_dokument: auch wenn die KI die Mail nicht fuer wichtig haelt)."""
         rest = 'rest_wichtig' if ohne_dokument else 'rest'
@@ -588,7 +476,8 @@ class KI:
                 'model': self.modell,
                 'messages': [{'role': 'user',
                               'content': self._prompt(absender, betreff, text, anhaenge,
-                                                      empfaenger, ohne_dokument, hinweis)}],
+                                                      empfaenger, ohne_dokument, hinweis,
+                                                      anhangtext)}],
                 'response_format': {'type': 'json_object'},
                 'temperature': 0,
             })
@@ -633,130 +522,97 @@ class KI:
 # --- Gesamtentscheidung ----------------------------------------------------
 
 def unterordner_gueltig(uo):
-    """Mehrstufig mit /, ohne leere Teile, .. oder fuehrenden /."""
-    if not uo:
-        return True
-    teile = uo.split('/')
-    return all(t.strip() and t not in ('.', '..') and '\\' not in t for t in teile)
+    return regeln.unterordner_gueltig(uo)
 
 
 KI_WICHTIG_SPAM = 0.3  # Mails ohne Dokument ab diesem Spam-Wert gar nicht erst der KI zeigen
 
 
-def _nummer_muster(nummer):
-    """Vertragsnummer als Regex: Trennzeichen (Leerzeichen / . _ -) sind egal,
-    davor und danach darf kein Buchstabe und keine Ziffer stehen."""
-    zeichen = [z for z in str(nummer).lower() if z.isalnum()]
-    if len(zeichen) < 5:
-        return None
-    return re.compile(r'(?<![a-z0-9])' + r'[\s/._-]*'.join(map(re.escape, zeichen))
-                      + r'(?![a-z0-9])')
+def teile_aus_mail(mail):
+    return regeln.Teile(absender=mail.absender or '', empfaenger=mail.empfaenger or '',
+                        betreff=mail.betreff or '', text=mail.text or '',
+                        anhangname=' '.join(n for n, _ in mail.dokumente),
+                        anhangtext=getattr(mail, 'anhangtext', '') or '')
 
 
-def vertrag_finden(vertraege, *texte):
-    """Den Vertrag (config/vertraege.yaml), dessen Nummer in den Texten steht;
-    bei mehreren der mit der laengsten Nummer."""
-    text = ' '.join(t or '' for t in texte).lower()
-    treffer = []
-    for v in vertraege or ():
-        for nummer in [v.get('nummer')] + list(v.get('auch') or []):
-            muster = _nummer_muster(nummer) if nummer else None
-            if muster and muster.search(text):
-                treffer.append((len(str(nummer)), v))
-                break
-    treffer.sort(key=lambda t: -t[0])
-    return treffer[0][1] if treffer else None
+def _ordner_steuer(v, steuerposten):
+    """Fester Steuerbezug des Ordners (config/steuerposten.yaml: ordner)."""
+    if v is None or not getattr(v, 'thema', ''):
+        return v
+    from . import steuer
+    for k in steuer.ordner_posten(steuerposten, v.thema, v.unterordner):
+        if k not in v.steuer:
+            v.steuer.append(k)
+    return v
 
 
-def vertrag_vorschlag(v, standard_personen=()):
-    return Vorschlag(thema=v['thema'], unterordner=str(v.get('unterordner') or ''),
-                     personen=list(v.get('personen') or standard_personen),
-                     konfidenz=1.0, durch='vertrag/' + str(v['nummer']),
-                     grund='Vertrag %s (%s)' % (v['nummer'], v.get('name') or v['thema']),
-                     weitere_themen=list(v.get('weitere_themen') or []),
-                     objekte=list(v.get('objekte') or []), steuer=list(v.get('steuer') or []))
+def _konflikt_vorschlag(r, treffer, standard_personen):
+    d = r.get('dann') or {}
+    return Vorschlag(thema=d.get('thema', ''), unterordner=str(d.get('unterordner') or ''),
+                     personen=list(d.get('personen') or standard_personen), konfidenz=0.5,
+                     durch='regel/' + r['name'],
+                     grund='Regel %s (%s)' % (r['name'], regeln.treffer_text(treffer)),
+                     weitere_themen=list(d.get('weitere_themen') or []),
+                     objekte=list(d.get('objekte') or []), steuer=list(d.get('steuer') or []))
 
 
-def einordnen(mail, regelwerk, lerner, einst, ki=None, vertraege=()):
+def einordnen(mail, regelwerk, einst, ki=None, steuerposten=None):
     """Ergebnis fuer eine Mail (mail.Mail) nach allen Stufen."""
     eigen = adresse(mail.absender) in {e.lower() for e in einst['eigene_adressen']}
-    gelernt = not (mail.hat_dokument or eigen) and lerner.wichtig_ohne_anhang(mail.absender)
-    wichtig = mail.hat_dokument or eigen or gelernt
-    regel = regeln.einordnen(mail.absender, mail.betreff, wichtig, regelwerk,
-                             mail.empfaenger)
-    if regel.aktion != regeln.VERWERFEN:
-        # Eine bekannte Vertragsnummer ordnet so sicher ein wie eine Regel
-        v = vertrag_finden(vertraege, mail.betreff, mail.text,
-                           ' '.join(n for n, _ in mail.anhaenge))
+    teile = teile_aus_mail(mail)
+    std = regelwerk.get('standard_personen') or []
+    auswertung = regeln.auswerten(teile, regelwerk)
+    merkmal_treffer = [dict(t, regel=r['name']) for r, ts in auswertung.merkmal for t in ts]
+
+    regel = regeln.einordnen(teile, mail.hat_dokument or eigen, regelwerk)
+    if regel is not None and regel.aktion != regeln.OFFEN:
+        return _ordner_steuer(regel, steuerposten)
+    if regel is not None:  # Regelkonflikt: alle passenden Regeln als Vorschlaege
+        liste = [_konflikt_vorschlag(r, t, std) for r, t in auswertung.ziel
+                 if r.get('art', 'ordner') == 'ordner']
+        v = liste[0] if liste else None
         if v is not None:
-            return _notiz(vertrag_vorschlag(v, regelwerk.get('standard_personen', [])))
-    if regel.aktion in (regeln.VERWERFEN, regeln.NOTIZ):
-        regel.durch = 'regel/' + regel.regel if regel.regel else 'regel/verwerfen'
+            v.alternativen = liste[1:]
+            regeln.merkmale_anwenden(v, auswertung.merkmal, std)
+            for x in liste:
+                _ordner_steuer(x, steuerposten)
+        regel.vorschlag = v
         return regel
 
     spam, gruende = spam_wert(mail.kopf, mail.absender, mail.betreff, mail.hat_dokument,
-                              lerner.kennt(mail.absender), mail.kategorie)
+                              False, mail.kategorie)
     if spam >= einst['spam_schwelle'] and not eigen:
         return regeln.Ergebnis(regeln.VERWERFEN, 'Spam-Wert %.2f: %s'
                                % (spam, ', '.join(gruende)),
-                               konfidenz=spam, durch='heuristik/spam')
+                               konfidenz=spam, durch='spam', treffer=merkmal_treffer)
 
-    if not wichtig:
-        grund = regel.grund
-        if regel.regel:
-            grund = 'Regel %s, aber kein Dokument' % regel.regel
+    anhaenge = [n for n, _ in mail.dokumente]
+    if not (mail.hat_dokument or eigen):
         if ki is not None and spam < KI_WICHTIG_SPAM:
             kv = ki.frage(mail.absender, mail.betreff, mail.text, [], mail.empfaenger,
                           ohne_dokument=True)
             if kv is not None and kv.thema:
-                # Nie ohne Rueckfrage: wichtig ist eine Vermutung der KI
+                regeln.merkmale_anwenden(kv, auswertung.merkmal, std)
+                _ordner_steuer(kv, steuerposten)
                 return regeln.Ergebnis(regeln.OFFEN, 'KI hält die Mail für wichtig: ' + kv.grund,
-                                       vorschlag=kv, konfidenz=kv.konfidenz, spam=spam)
-        return regeln.Ergebnis(regeln.INDEX, grund, spam=spam)
+                                       vorschlag=kv, konfidenz=kv.konfidenz, spam=spam,
+                                       treffer=merkmal_treffer)
+        return regeln.Ergebnis(regeln.INDEX, 'keine Regel, kein Dokument-Anhang', spam=spam)
 
-    vorschlag = lerner.vorschlag(mail.absender, mail.betreff,
-                                 [n for n, _ in mail.anhaenge], mail.text)
-    versicherung = regel.aktion == regeln.OFFEN and regel.grund.startswith('Versicherung')
-    sicher = lambda v: v is not None and v.thema and v.konfidenz >= einst['schwelle']
-
-    if not versicherung and sicher(vorschlag):
-        return _notiz(vorschlag)
-
+    kv = None
     if ki is not None:
-        # Versicherungen fragt die KI auch, sie landen aber immer bei Harald
-        kv = ki.frage(mail.absender, mail.betreff, mail.text,
-                      [n for n, _ in mail.anhaenge], mail.empfaenger)
-        if kv is not None and kv.thema:
-            kv = nummer_pruefen(kv, mail.betreff, mail.text, [n for n, _ in mail.anhaenge])
-        if (not versicherung and kv is not None and not kv.thema
-                and kv.konfidenz >= einst['schwelle']):
-            return regeln.Ergebnis(regeln.VERWERFEN, kv.grund,
-                                   konfidenz=kv.konfidenz, durch=kv.durch)
-        if not versicherung and sicher(kv):
-            return _notiz(kv)
-        if versicherung and kv is not None and kv.thema and vorschlag is not None:
-            # Vorschlag der Heuristik bleibt als Alternative sichtbar
-            kv.alternativen = (kv.alternativen + [vorschlag])[:3]
-        if kv is not None and kv.thema and (vorschlag is None or versicherung
-                                            or kv.konfidenz > vorschlag.konfidenz):
-            vorschlag = kv
-
-    if eigen and vorschlag is None:
-        grund = 'an dich selbst gesendet'
-    elif gelernt and vorschlag is not None and vorschlag.konfidenz < einst['schwelle']:
-        grund = 'ohne Anhang, aber von dir schon abgelegt; Konfidenz %.2f' % vorschlag.konfidenz
-    elif versicherung or vorschlag is None:
-        grund = regel.grund
-    else:
-        grund = 'Konfidenz %.2f unter Schwelle %.2f' % (vorschlag.konfidenz, einst['schwelle'])
-    return regeln.Ergebnis(regeln.OFFEN, grund, vorschlag=vorschlag,
-                           konfidenz=vorschlag.konfidenz if vorschlag else 0.0)
-
-
-def _notiz(v):
-    return regeln.Ergebnis(regeln.NOTIZ, v.grund, thema=v.thema,
-                           unterordner=v.unterordner, personen=list(v.personen),
-                           konfidenz=v.konfidenz, durch=v.durch, mail_drive=v.mail_drive,
-                           weitere_themen=list(v.weitere_themen), objekte=list(v.objekte),
-                           steuer=list(v.steuer), jahr=v.jahr, jahr_grund=v.jahr_grund,
-                           dauerhaft=v.dauerhaft)
+        kv = ki.frage(mail.absender, mail.betreff, mail.text, anhaenge, mail.empfaenger,
+                      anhangtext=teile.anhangtext)
+        if kv is not None and not kv.thema and kv.konfidenz >= einst['schwelle'] and not eigen:
+            return regeln.Ergebnis(regeln.VERWERFEN, kv.grund, konfidenz=kv.konfidenz,
+                                   durch=kv.durch)
+        if kv is not None and not kv.thema:
+            kv = None
+    if kv is not None:
+        regeln.merkmale_anwenden(kv, auswertung.merkmal, std)
+        for x in [kv] + list(kv.alternativen):
+            _ordner_steuer(x, steuerposten)
+    grund = ('an dich selbst gesendet' if eigen and kv is None
+             else 'keine Regel passt' + (', Vorschlag der KI' if kv is not None else ''))
+    return regeln.Ergebnis(regeln.OFFEN, grund, vorschlag=kv,
+                           konfidenz=kv.konfidenz if kv else 0.0, treffer=merkmal_treffer)

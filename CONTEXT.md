@@ -37,40 +37,64 @@ Eine nur auffindbar gehaltene Mail (Absender, Betreff, Datum, Kurzinhalt), die k
 _Avoid_: Metadaten-Eintrag
 
 **Einordnen**:
-Das automatische Ablegen, Verschlagworten, Verknüpfen und Zusammenfassen eines **Eingangs** durch die KI, das zu einer **Notiz** führt.
+Das Ablegen, Verschlagworten und Verknüpfen eines **Eingangs** durch **Regeln**, das zu einer **Notiz** führt; ohne passende Regel macht die KI einen **Vorschlag**.
 _Avoid_: Verarbeiten, Taggen
 
-**Regel**:
-Eine feste, ohne KI ausführbare Vorschrift, wie ein bestimmter **Eingang** eingeordnet wird (z. B. „Absender ionos → Thema EDV“). Sie gilt immer (**Konfidenz** 1,0). Harald legt **Regeln** an einer konkreten Mail an, nicht vorab.
-_Avoid_: Route, Filter, Automatismus
+**Bestandteil**:
+Ein prüfbarer Teil eines **Eingangs**: Absender, Empfänger (An/Cc), Betreff, Mailtext, Anhangname oder **Anhangtext**. Alles, was eine **Regel** entscheidet, muss aus Bestandteilen ableitbar sein.
+_Avoid_: Feld, Attribut
 
-**Konfidenz**:
-Wie sicher eine Einordnung ist, von 0 bis 1. Ab der **Schwelle** (Standard 0,8) wird ohne Rückfrage abgelegt, darunter landet der **Eingang** mit **Vorschlag** bei Harald.
-_Avoid_: Score, Wahrscheinlichkeit
+**Anhangtext**:
+Der Text der Anhänge eines **Eingangs**, aus dem PDF gelesen oder per Texterkennung (OCR) aus Scans und Fotos gewonnen. Er liegt im Daten-Repo unter `anhangtext/<id>.txt`, damit Regeln und Beispiele ihn später noch prüfen können.
+_Avoid_: OCR-Ergebnis, Volltext
+
+**Regel**:
+Eine feste, ohne KI ausführbare Vorschrift aus **Wenn** und **Dann**: Wenn alle **Bedingungen** zutreffen, dann gilt, was die Regel festlegt. Es gibt drei Arten: **Ordnerregel** (Ordner und Merkmale), **Merkmalregel** (nur Merkmale wie Person, **Objekt**, **Steuerbezug**) und **Aussortierregel** (Dann: aussortieren). Regeln entstehen aus dem **Bestand** und aus Vorschlägen; Harald übernimmt sie.
+_Avoid_: Route, Filter, Automatismus, Vertrag (ein Vertrag ist eine Regel mit Nummer-Bedingung)
+
+**Bedingung**:
+Ein Teil des **Wenn** einer **Regel**: welcher **Bestandteil** (oder „überall“), wie verglichen wird und mit welchen Werten. Vergleiche: ganzes Wort (Standard), Wortteil (nur ausdrücklich), Nummer (Trennzeichen egal, „624/220429“ = „624 220429“) und „nicht“. Werte einer Bedingung sind „oder“, mehrere Bedingungen „und“.
+_Avoid_: Muster, Kriterium
+
+**Regelkonflikt**:
+Zwei **Ordnerregeln** passen auf denselben **Eingang**. Ordnerregeln müssen eindeutig sein; ein Konflikt wird beim Anlegen gegen den **Bestand** geprüft und im laufenden Betrieb nicht entschieden, der Eingang landet mit beiden Regeln bei Harald, und eine Regel wird nachgeschärft. **Merkmalregeln** dürfen zusammen passen, ihre Merkmale addieren sich.
+_Avoid_: Kollision, Doppeltreffer
+
+**Wert im Ordner**:
+Der Unterordner einer **Ordnerregel** enthält einen Wert aus dem **Eingang**, am besten eine gleichbleibende Nummer (Vertrag, Kunde, Kassenzeichen), sonst den Namen der Gegenpartei, nie eine Rechnungsnummer. Neue Ordner schlägt das System als „Gegenpartei_Nummer“ vor; bestehende Drive-Ordner behalten ihren Namen.
+_Avoid_: Ordnerschlüssel
+
+**Bestand**:
+Alles bisher Hereingekommene mit seinen **Bestandteilen**: **Notizen**, offene **Eingänge** und **Indexeinträge** (`index/bestand.jsonl`). An ihm werden **Regeln** geprüft (wie viele Mails passen, welche **Regelkonflikte**), und aus ihm und der **Ordnerliste** wurden die Regeln neu aufgebaut.
+_Avoid_: Historie, Trainingsdaten
 
 **Vorschlag**:
-Thema, Unterordner und Personen, die das System für einen **Eingang** unterhalb der **Schwelle** annimmt, mit **Konfidenz** und Begründung. Harald übernimmt, ändert oder verwirft ihn; seine Entscheidung wird zur **Notiz**, aus der die **Heuristik** lernt.
+Ordner und Merkmale, die die KI für einen **Eingang** annimmt, zu dem keine **Regel** passt, mit Begründung. Die KI legt nie selbst ab; Harald übernimmt, ändert oder verwirft, und aus seiner Ablage kann ein **Regelvorschlag** werden.
 _Avoid_: Empfehlung, Prognose
 
-**Heuristik**:
-Einordnen ohne **Regel** und ohne KI, aus vorhandenen **Notizen** (gleicher Absender, gleiche Domain), dem **Ablagewissen** und Stichwörtern der Themen.
-_Avoid_: Machine Learning, Klassifikator
-
-**Ablagewissen**:
-Bekannte Gegenparteien aus der Drive-Ablage und früheren Steuererklärungen (z. B. „HUK, Hausrat → Versicherungen/01HUK_Hausrat“). Liefert **Vorschläge**, legt aber allein nichts ab.
-_Avoid_: Stammdaten, Mapping
-
-**Vertragsliste**:
-Bekannte Verträge mit Nummer, Ablageordner, **Objekt** und **Steuerbezug** (`config/vertraege.yaml`). Steht eine Vertragsnummer in der Mail, wird ohne Rückfrage abgelegt, so sicher wie mit einer **Regel**. Eine Nummer im Ordnernamen (z. B. 07HUK_Kfz_624_220429-P) zählt ähnlich: gleiche Nummer hebt, eine andere Nummer im Betreff senkt die **Konfidenz**.
-_Avoid_: Policenliste, Stammdaten
+**Regelvorschlag**:
+Eine **Regel**, die das System vorschlägt, mit Beispielmails aus dem **Bestand** und ihren **Regelkonflikten**: aus dem Neuaufbau (Nummer oder Gegenpartei im Ordnernamen) oder weil Harald zweimal Gleiches abgelegt hat. Gilt erst, wenn Harald sie übernimmt.
+_Avoid_: Regelentwurf
 
 **Objekt**:
 Worauf sich ein Inhalt bezieht, z. B. Kieler Str. 37 oder das Auto. Eine **Notiz** kann mehrere haben; Versicherungen beziehen sich immer auf ein Objekt und ein Risiko.
 _Avoid_: Immobilie (zu eng), Asset
 
 **Steuerbezug**:
-Für welche Angabe der Steuererklärung ein Inhalt zählt (Werbungskosten, Vermietung, Vorsorge, §35a, USt Solar, KAP …). Unabhängig vom Ablageordner; eine **Notiz** kann mehrere haben.
+Für welchen **Steuerposten** ein Inhalt zählt. Unabhängig vom Ablageordner; eine **Notiz** kann mehrere haben. Er kommt fest aus dem Ordner (`ordner` in `config/steuerposten.yaml`), aus **Regeln** oder von Harald.
 _Avoid_: Steuerkategorie, Anlage (nur ein Teil davon)
+
+**Steuerposten**:
+Eine Angabe der Steuererklärung als Person · Anlage · **Objekt** · Posten, z. B. „Harald · Anlage V · Kieler 37 · Schuldzinsen“ (`harald.v.kieler37.schuldzinsen`), ohne Zeilennummern. Die Liste in `config/steuerposten.yaml` entstand aus den Erklärungen 2024/2025; neue Posten schlägt die KI vor, Harald bestätigt. Jede Person hat eigene Posten; Zusammenveranlagung ist Sache der Steuererklärung, nicht des Sammelns.
+_Avoid_: Steuerkategorie, Zeile
+
+**Betrag**:
+Der Endbetrag eines Belegs, dazu Zahlungs- oder Fälligkeitsdatum und bei Handwerkern der Lohnanteil (§35a), aus Mailtext und **Anhangtext** gelesen. Die **Steuerübersicht** summiert ihn je **Steuerposten**.
+_Avoid_: Summe, Preis
+
+**Steuerübersicht**:
+Je Jahr und **Person** die Belege nach Anlage und **Steuerposten** mit Summen, Links und fehlenden Belegen (Posten, die im Vorjahr Belege hatten), als `steuer/<jahr>.json` und CSV für WISO; in der Web-App der Reiter „Steuer“.
+_Avoid_: Steuerreport
 
 **Ordnerliste**:
 Alle bekannten Unterordner der Drive-Ablage je Thema, auch mehrstufig (z. B. „Finanzen/Karten“). Sie steht in `config/ordner.yaml` im Daten-Repo und wächst mit jedem Ablegen in einen neuen Ordner. Die Web-App zeigt sie als Ordnerauswahl, die für eine Mail wahrscheinlichsten Ordner stehen oben.
@@ -89,7 +113,7 @@ Der Ordner „0000-dauerhaft“ für Inhalte, die viele Jahre betreffen (Kauf-, 
 _Avoid_: 0000 (so heißt der Ordner nicht), Archiv
 
 **Spam-Wert**:
-Wie sehr eine Mail nach Werbung oder Spam aussieht, von 0 bis 1, aus Merkmalen im Mail-Kopf (Abmeldelink, Massenversand, Spam-Markierung des Anbieters, Gmail-Kategorie) und Betreff. Ab der Spam-Schwelle wird verworfen; die Mail bleibt als **Indexeintrag** mit Grund auffindbar.
+Wie sehr eine Mail nach Werbung oder Spam aussieht, von 0 bis 1, aus Merkmalen im Mail-Kopf (Abmeldelink, Massenversand, Spam-Markierung des Anbieters, Gmail-Kategorie) und Betreff. Ab der Spam-Schwelle wird aussortiert; die Mail bleibt als **Indexeintrag** mit Grund auffindbar. Was der Spam-Wert nicht erkennt, sortiert eine **Aussortierregel** aus.
 _Avoid_: Spam-Score, Junk
 
 **Umbau**:
@@ -113,10 +137,13 @@ Die Web-App spricht Alltagssprache; die Begriffe oben gelten in Code und Doku.
 | Zu erledigen, offen | **Eingang** |
 | abgelegt | **Notiz** |
 | nur gemerkt | **Indexeintrag** |
-| aussortiert | verworfen (**Spam-Wert** oder Verwerfen-Liste) |
-| unsicher, Vorschlag | **Vorschlag** unter der **Schwelle** (Prozentzahlen zeigt die Web-App nicht) |
+| aussortiert | verworfen (**Spam-Wert** oder Aussortierregel) |
+| Vorschlag | **Vorschlag** der KI oder **Regelvorschlag** |
+| erkannt an | die **Bedingungen** der **Regel**, die gepasst haben |
+| passt auch auf | **Regelkonflikt** |
+| Steuer | **Steuerübersicht** |
 | Ordner in Drive, „2026 › 08Versicherungen › …“ | **Jahresordner**, Themenordner (`ablage` in `config/themen.yaml`) und Unterordner, immer mit den echten Drive-Namen |
-| Einrichtung | Regeln, **Vertragsliste**, **Ordnerliste**, Personen, **Zugangsdaten**, Abrufe |
+| Einrichtung | Regeln, **Ordnerliste**, Personen, **Steuerposten**, **Zugangsdaten**, Abrufe |
 
 ## Relationships
 
@@ -126,11 +153,14 @@ Die Web-App spricht Alltagssprache; die Begriffe oben gelten in Code und Doku.
 - Eine **Notiz** gehört mindestens einer **Person**.
 - Eine **Notiz** hat ein Hauptthema (bestimmt den einen Drive-Ordner), beliebig viele weitere Themen, **Objekte** und **Steuerbezüge**.
 - Der Drive-Ordner einer **Notiz** ist **Jahresordner** (nach **Zugehörigkeitsjahr**) › Themenordner › Unterordner; dazu höchstens eine Kopie in der **Dauerablage**.
-- **Einordnen** läuft in Stufen: **Regel**, **Spam-Wert**, **Heuristik**, optional KI. Die erste Stufe mit genügend **Konfidenz** entscheidet; sonst entsteht ein **Vorschlag**.
+- **Einordnen** läuft in Stufen: **Regel** (genau eine **Ordnerregel** passt, dazu alle passenden **Merkmalregeln**), **Spam-Wert**, sonst **Vorschlag** der KI. Passen zwei Ordnerregeln, ist das ein **Regelkonflikt** und kommt zu Harald.
+- Eine **Regel** hat eine oder mehrere **Bedingungen** auf **Bestandteilen**; eine **Ordnerregel** zeigt auf einen Unterordner mit **Wert im Ordner**.
+- Ein **Steuerbezug** zeigt auf genau einen **Steuerposten**; ein **Steuerposten** gehört genau einer **Person**.
 - Jedes **Einordnen** und jeder **Umbau** erzeugt Einträge im **Änderungsprotokoll**.
 
 ## Flagged ambiguities
 
 - „Dokument“ wurde sowohl für PDFs als auch für Notizen benutzt. Geklärt: die Datei heißt **Original**, die Markdown-Fassung heißt **Notiz**.
 - „Jahr“ einer Mail: Empfangsjahr oder Jahr, zu dem sie gehört? Geklärt (2026-11-01): abgelegt wird nach **Zugehörigkeitsjahr**, bei Geldfluss zählt die Zahlung.
+- Regeln: Bis Oktober 2026 entschieden Verwerfen-Liste, Prüfen-Liste, Regeln, Vertragsliste, Ablagewissen und Lernen vom Absender nebeneinander. Geklärt (2026-11-02, ADR 0004): eine Regelart Wenn/Dann aus **Bestandteilen**, eindeutig, aus dem **Bestand** neu aufgebaut.
 - Ordnernamen: Die Web-App zeigte Kurznamen („Albert-Einstein 59 / versicherung“), die Harald in Drive nicht wiederfand. Geklärt: überall die echten Drive-Namen mit Nummern und Jahr, mit Link in den Ordner.

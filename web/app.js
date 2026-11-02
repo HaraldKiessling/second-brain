@@ -15,7 +15,7 @@ const MAIL_WORKFLOW = 'mail.yml';
 const ORDNER_DATEI = 'config/ordner.yaml';
 
 const $ = (sel) => document.querySelector(sel);
-const zustand = { repo: '', token: '', themen: {}, personen: {}, regeln: null, regelSha: '', bearbeitet: -1, regelVonMail: null, regelVonVorschlag: null, ordner: {}, wissen: [], objekte: {}, steuer: {}, vertraege: [] };
+const zustand = { repo: '', token: '', themen: {}, personen: {}, regeln: null, regelSha: '', bearbeitet: -1, regelVonMail: null, regelVonVorschlag: null, ordner: {}, objekte: {}, steuer: {}, steuerConfig: {}, bestand: null };
 
 // --- Speicher (localStorage kann fehlen, z. B. im privaten Modus) ----------
 
@@ -126,12 +126,12 @@ function melde(text, art = '') {
 }
 
 function zeigeReiter(name, teil) {
-  if (!['start', 'mails', 'einrichtung'].includes(name)) name = 'start';
+  if (!['start', 'mails', 'steuer', 'einrichtung'].includes(name)) name = 'start';
   document.querySelectorAll('.reiter').forEach((s) => { s.hidden = s.id !== name; });
   document.querySelectorAll('#reiter button').forEach((b) => b.classList.toggle('aktiv', b.dataset.reiter === name));
   merke('sb-reiter', name);
   if (name === 'einrichtung') return zeigeTeil(teil || lade('sb-teil') || 'regeln');
-  return ({ start: zeigeStart, mails: zeigeMails })[name]();
+  return ({ start: zeigeStart, mails: zeigeMails, steuer: zeigeSteuer })[name]();
 }
 
 function zelle(zeile, text, klasse) {
@@ -549,8 +549,8 @@ function wasWoListe(zeilen, pfad) {
 }
 
 // --- Ordnerauswahl ----------------------------------------------------------
-// Alle bekannten Ordner: Themenordner, config/ordner.yaml, Ablagewissen und
-// Regeln. Fuer eine Mail kommen die wahrscheinlichsten nach oben.
+// Alle bekannten Ordner: Themenordner und config/ordner.yaml. Fuer eine Mail
+// kommen die wahrscheinlichsten nach oben (passende Regeln zuerst).
 
 const ordnerSchluessel = (thema, uo) => `${thema}\t${uo || ''}`;
 
@@ -563,7 +563,7 @@ function bekannteOrdner() {
   };
   for (const t of Object.keys(zustand.themen)) dazu(t, '', 'Themenordner');
   // Nur die Ordnerliste (echter Drive-Baum) zaehlt als bestehend. Ziele aus
-  // Ablagewissen, Vertraegen und Regeln erscheinen nur, wenn sie passen, und dann als neu.
+  // Regeln und Vorschlaegen erscheinen nur, wenn sie passen, und dann als neu.
   for (const [t, liste] of Object.entries(zustand.ordner || {})) for (const uo of liste || []) dazu(t, String(uo), 'Ordnerliste');
   return alle;
 }
@@ -603,17 +603,16 @@ function ordnerRangliste(kontext) {
   for (const a of v && v.thema ? [v, ...(v.alternativen || [])] : []) {
     if (a.thema in zustand.themen) gib(a.thema, (a.unterordner || '').replace(/^\/+|\/+$/g, ''), 2 + 3 * (a.konfidenz || 0), `Vorschlag ${Math.round((a.konfidenz || 0) * 100)} %`);
   }
-  const roh = [kontext.absender, kontext.betreff, ...(kontext.anhaenge || [])].join(' ').toLowerCase();
-  for (const w of zustand.wissen || []) {
-    const gefunden = (w.muster || []).map(String).filter((m) => roh.includes(m.toLowerCase()));
-    if (gefunden.length) gib(w.thema, String(w.unterordner || ''), 1.5 * gefunden.length, gefunden.join(', '));
+  // Ordnerregeln, die auf diese Mail passen, stehen ganz oben
+  const teile = { absender: kontext.absender || '', empfaenger: kontext.empfaenger || '', betreff: kontext.betreff || '',
+    text: kontext.text || '', anhangname: (kontext.anhaenge || []).join(' '), anhangtext: '' };
+  for (const r of ((zustand.regeln && zustand.regeln.regeln) || []).filter((x) => (x.art || 'ordner') === 'ordner')) {
+    const t = regelTrifft(r, teile);
+    if (t) gib(r.dann.thema, String(r.dann.unterordner || ''), 8, `Regel ${r.name}`);
   }
-  // Vertragsnummern: Vertragsliste und Nummern in Ordnernamen
+  // Nummern aus der Mail in Ordnernamen
   const imBetreff = nummern([kontext.betreff, ...(kontext.anhaenge || [])].join(' '));
   const ueberall = new Set([...imBetreff, ...nummern(kontext.text)]);
-  for (const v of zustand.vertraege || []) {
-    if (schnitt(nummern(v.nummer), ueberall)) gib(v.thema, String(v.unterordner || ''), 8, `Vertrag ${v.nummer}`);
-  }
   for (const o of [...alle.values()]) {
     const eigene = nummern(o.unterordner);
     if (!eigene.size) continue;
@@ -924,6 +923,8 @@ async function eingangAblegen(e, w, durch, wie = 'aus Eingang abgelegt', weitere
   delete meta.konfidenz;
   const thema = zustand.themen[w.thema] || {};
   meta.themen = [w.thema, ...(w.weitere_themen || []).filter((t) => t !== w.thema && t in zustand.themen)];
+  // Fester Steuerbezug des Ordners (config/steuerposten.yaml) kommt immer dazu
+  w = { ...w, steuer: [...new Set([...(w.steuer || []), ...ordnerPosten(w.thema, w.unterordner)])] };
   for (const feld of ['objekte', 'steuer']) {
     if ((w[feld] || []).length) meta[feld] = w[feld];
     else delete meta[feld];
@@ -1192,10 +1193,12 @@ function entscheidungKarte(e, art, fertig = () => {}) {
     jahrHinweis.textContent = j !== empfangen
       ? `Gehört zu ${j}, empfangen ${empfangen}${j === vorschlagJahr && vorschlagJahrGrund ? `: ${vorschlagJahrGrund}` : ''}.` : '';
     if (art === 'eingang' && v && v.thema && !bearbeitet) {
-      zielInfo.textContent = `Vorschlag, unsicher. ${v.grund || ''}`.trim();
+      zielInfo.textContent = (meta.regelkonflikt || []).length
+        ? `Mehrere Regeln passen (${meta.regelkonflikt.join(', ')}): bitte wählen und die Regeln nachschärfen.`
+        : `Vorschlag, bitte prüfen. ${v.grund || ''}`.trim();
     } else if (art === 'notiz' && !bearbeitet) {
       const durch = String(meta.eingeordnet_durch || '');
-      zielInfo.textContent = durch === 'manuell' ? 'Von dir abgelegt.' : durch ? `Automatisch abgelegt (${durch.startsWith('regel/') ? 'Regel ' + durch.slice(6) : durch.startsWith('vertrag/') ? 'Vertrag ' + durch.slice(8) : durch.startsWith('ki/') ? 'KI' : 'gelernt'}${meta.konfidenz && meta.konfidenz < 1 ? ', unsicher' : ''}).` : '';
+      zielInfo.textContent = durch === 'manuell' ? 'Von dir abgelegt.' : durch ? `Automatisch abgelegt (${durch.startsWith('regel/') ? 'Regel ' + durch.slice(6) : durch.startsWith('vertrag/') ? 'Vertrag ' + durch.slice(8) : durch.startsWith('ki/') ? 'KI' : 'früher gelernt'}${(meta.regel_treffer || []).length ? ', erkannt an ' + trefferText(meta.regel_treffer) : ''}${meta.konfidenz && meta.konfidenz < 1 ? ', unsicher' : ''}).` : '';
     } else {
       zielInfo.textContent = bearbeitet && w.thema ? 'Von dir gewählt.' : '';
     }
@@ -1489,28 +1492,12 @@ async function eingangVerwerfen(e, spam) {
       { pfad: e.pfad, loeschen: true },
     ];
     if (spam && adresse) {
-      const regeln = JSON.parse((await dateiLesen(REGEL_DATEI)).text);
-      if (!regeln.verwerfen.includes(adresse)) regeln.verwerfen.push(adresse);
-      aenderungen.push({ pfad: REGEL_DATEI, text: JSON.stringify(regeln, null, 2) + '\n' });
+      aenderungen.push(await aussortierenAufnehmen(adresse));
       zustand.regeln = null;
     }
     return aenderungen;
   }, `eingang: ${e.meta.id} ${spam ? 'als Spam verworfen' : 'nur Index'} (Web)`);
   melde(spam ? `Verworfen; künftige Mails von ${adresse} werden aussortiert.` : 'In den Index verschoben.', 'gut');
-}
-
-async function regelAusMail(e, w) {
-  const adresse = absenderAdresse(e);
-  const domain = adresse.split('@')[1] || adresse;
-  const name = domain.split('.').slice(-2, -1)[0] || domain;
-  await zeigeReiter('einrichtung', 'regeln');
-  zustand.regelVonMail = e;
-  zustand.regelVonVorschlag = null;
-  regelFormular(-1, { name, absender: [domain], thema: w.thema, unterordner: w.unterordner, personen: w.personen,
-    weitere_themen: w.weitere_themen, objekte: w.objekte, steuer: w.steuer,
-    ...(e.meta.ohne_anhang ? { ohne_anhang: true } : {}), ...(w.mail_drive ? { mail_drive: true } : {}) });
-  $('#regel-form-titel').textContent = `Neue Regel aus Mail „${titelVon(e.text)}“`;
-  melde('Prüfe die Regel. Beim Speichern wird auch diese Mail abgelegt.');
 }
 
 async function zeigeVerworfen() {
@@ -1527,15 +1514,130 @@ async function zeigeVerworfen() {
   if (!zeilen.length) zelle(tbody.insertRow(), 'Nichts verworfen.', 'hinweis');
 }
 
-// Regeln
+// Regeln (ADR 0004): Wenn (Bedingungen an Bestandteile der Mail) -> Dann
+// (Ordner und Merkmale). Gleiche Logik wie src/second_brain/regeln.py.
+
+const TEILE = ['absender', 'empfaenger', 'betreff', 'text', 'anhangname', 'anhangtext'];
+const TEIL_NAMEN = { absender: 'Absender', empfaenger: 'Empfänger', betreff: 'Betreff', text: 'Mailtext',
+  anhangname: 'Anhangname', anhangtext: 'Text im Anhang', ueberall: 'Mail oder Anhang' };
+const VERGLEICH_NAMEN = { wort: 'enthält das Wort', nummer: 'enthält die Nummer', wortteil: 'enthält (auch als Wortteil)', nicht: 'enthält nicht' };
+const ART_NAMEN = { ordner: 'Ordner bestimmen', merkmal: 'Nur Merkmale ergänzen', aussortieren: 'Aussortieren' };
+const STEUER_DATEI = 'config/steuerposten.yaml';
+const BESTAND_DATEI = 'index/bestand.jsonl';
+
+function falten(text) {
+  return String(text || '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss');
+}
+const regexEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function nummerMuster(wert) {
+  const z = [...falten(wert)].filter((c) => /[a-z0-9]/.test(c));
+  if (z.length < 5) return null;
+  return new RegExp('(?<![a-z0-9])' + z.map(regexEsc).join('[\\s/._-]*') + '(?![a-z0-9])');
+}
+function wortMuster(wert) {
+  const w = falten(wert).trim();
+  if (!w) return null;
+  return new RegExp('(?<![a-z0-9])' + w.split(/\s+/).map(regexEsc).join('\\s+') + '(?![a-z0-9])');
+}
+function wertPasst(vergleich, wert, text) {
+  if (vergleich === 'wortteil') { const w = falten(wert).trim(); return !!w && text.includes(w); }
+  const m = vergleich === 'nummer' ? nummerMuster(wert) : wortMuster(wert);
+  return !!(m && m.test(text));
+}
+function teilText(e, teil) {
+  return teil === 'ueberall' ? TEILE.map((t) => e[t] || '').join('\n') : (e[teil] || '');
+}
+// Treffer [{teil, wert}] oder null
+function regelTrifft(r, e) {
+  const wenn = r.wenn || [];
+  if (!wenn.some((b) => (b.vergleich || 'wort') !== 'nicht')) return null;
+  const treffer = [];
+  for (const b of wenn) {
+    const teil = b.teil || 'ueberall';
+    const text = falten(teilText(e, teil));
+    const werte = (b.werte || []).map(String).filter((w) => w.trim());
+    if ((b.vergleich || 'wort') === 'nicht') {
+      if (werte.some((w) => wertPasst('wort', w, text))) return null;
+      treffer.push({ teil, wert: 'ohne ' + werte.join(', ') });
+      continue;
+    }
+    const w = werte.find((x) => wertPasst(b.vergleich || 'wort', x, text));
+    if (w === undefined) return null;
+    treffer.push({ teil, wert: w });
+  }
+  return treffer;
+}
+const istZielregel = (r) => (r.art || 'ordner') !== 'merkmal';
+const trefferText = (t) => (t || []).map((x) => `${TEIL_NAMEN[x.teil] || x.teil}: ${x.wert}`).join('; ');
+
+function wertImOrdner(r) {
+  const kurz = falten((r.dann || {}).unterordner).replace(/[^a-z0-9]/g, '');
+  if (!kurz) return false;
+  for (const b of r.wenn || []) {
+    if ((b.vergleich || 'wort') === 'nicht') continue;
+    for (const w of b.werte || []) {
+      const f = falten(w);
+      if (b.vergleich === 'nummer') { const z = f.replace(/[^a-z0-9]/g, ''); if (z && kurz.includes(z)) return true; continue; }
+      const basis = f.includes('.') ? f.slice(0, f.lastIndexOf('.')) : f;
+      if (basis.split(/[^a-z0-9]+/).some((t) => t.length >= 3 && kurz.includes(t))) return true;
+    }
+  }
+  return false;
+}
+
+// Auf welche Eingaenge des Bestands passt die Regel, wo kollidiert sie mit einer anderen Zielregel?
+function bestandPruefen(regel, alle, bestand) {
+  const andere = alle.filter((r) => r.name !== regel.name && istZielregel(r));
+  const passt = [], konflikte = [];
+  for (const e of bestand) {
+    if (!regelTrifft(regel, e)) continue;
+    passt.push(e);
+    if (istZielregel(regel)) {
+      const namen = andere.filter((r) => regelTrifft(r, e)).map((r) => r.name);
+      if (namen.length) konflikte.push({ ...e, regeln: namen });
+    }
+  }
+  return { passt, konflikte };
+}
+
+async function rohLesen(pfad) {
+  // Auch fuer Dateien ueber 1 MB (Bestand): Inhalt direkt statt base64
+  const antwort = await fetch(`https://api.github.com/repos/${zustand.repo}/contents/${encodeURI(pfad)}`, {
+    headers: { Accept: 'application/vnd.github.raw+json', Authorization: 'Bearer ' + zustand.token, 'X-GitHub-Api-Version': '2022-11-28' },
+  });
+  if (antwort.status === 404) return '';
+  if (!antwort.ok) throw new Error(`GitHub ${antwort.status}`);
+  return antwort.text();
+}
+
+async function bestandLaden() {
+  if (!zustand.bestand) {
+    const text = await rohLesen(BESTAND_DATEI).catch(() => '');
+    zustand.bestand = text.split('\n').filter(Boolean).map((z) => { try { return JSON.parse(z); } catch { return null; } }).filter(Boolean);
+  }
+  return zustand.bestand;
+}
+
+// Teile eines Eingangs / einer Notiz aus der Web-App (fuer "Regel aus dieser Mail")
+function teileVon(e) {
+  const m = e.meta || {};
+  return { absender: absenderAdresse(e), empfaenger: m.empfaenger || '', betreff: titelVon(e.text),
+    text: (e.text || '').replace(/^# .*\n+/, ''), anhangname: (m.anhaenge || []).join(' '), anhangtext: '' };
+}
 
 async function stammdatenLaden() {
-  const [themen, personen, ordner, wissen, bezuege, vertraege] = await Promise.all([dateiLesen('config/themen.yaml'), dateiLesen('config/personen.yaml'),
-    dateiOderLeer(ORDNER_DATEI), dateiOderLeer('config/ablagewissen.yaml'), dateiOderLeer('config/bezuege.yaml'), dateiOderLeer('config/vertraege.yaml')]);
-  zustand.vertraege = (jsyaml.load(vertraege) || {}).vertraege || [];
+  const [themen, personen, ordner, bezuege, steuer] = await Promise.all([dateiLesen('config/themen.yaml'), dateiLesen('config/personen.yaml'),
+    dateiOderLeer(ORDNER_DATEI), dateiOderLeer('config/bezuege.yaml'), dateiOderLeer(STEUER_DATEI)]);
+  zustand.personen = jsyaml.load(personen.text).personen || {};
   const b = jsyaml.load(bezuege) || {};
   zustand.objekte = b.objekte || {};
-  zustand.steuer = b.steuer || {};
+  zustand.steuerConfig = jsyaml.load(steuer) || {};
+  zustand.steuer = {};
+  for (const [k, p] of Object.entries(zustand.steuerConfig.posten || {})) {
+    const pers = (zustand.personen && zustand.personen[p.person] || {}).name || p.person || '';
+    zustand.steuer[k] = { ...p, name: p.name || [pers, p.anlage, (zustand.objekte[p.objekt] || {}).name ? (zustand.objekte[p.objekt].name).split(' (')[0] : p.objekt, p.posten].filter(Boolean).join(' · ') };
+  }
   const t = jsyaml.load(themen.text) || {};
   zustand.themen = t.themen || {};
   zustand.jahre = t.jahre || {};
@@ -1545,7 +1647,35 @@ async function stammdatenLaden() {
   zustand.ordner = o.ordner || {};
   zustand.ordnerIds = o.ids || {};
   zustand.dauerhaftOrdner = o.dauerhaft || {};
-  zustand.wissen = (jsyaml.load(wissen) || {}).eintraege || [];
+}
+
+// Fester Steuerbezug eines Ordners (config/steuerposten.yaml: ordner), Unterebenen erben
+function ordnerPosten(thema, uo) {
+  const zuordnung = (zustand.steuerConfig || {}).ordner || {};
+  const teile = [thema, ...String(uo || '').split('/').filter(Boolean)];
+  for (let n = teile.length; n > 0; n--) {
+    const k = teile.slice(0, n).join('/');
+    if (k in zuordnung) return zuordnung[k] || [];
+  }
+  return [];
+}
+
+function regelWennText(r) {
+  return (r.wenn || []).map((b) => `${TEIL_NAMEN[b.teil || 'ueberall']} ${VERGLEICH_NAMEN[b.vergleich || 'wort']} „${(b.werte || []).join('“ oder „')}“`).join(' und ');
+}
+function regelDannText(r) {
+  const d = r.dann || {};
+  if ((r.art || 'ordner') === 'aussortieren') return 'aussortieren (bleibt nur gemerkt)';
+  const teile = [];
+  if ((r.art || 'ordner') === 'ordner') teile.push(pfadText('', d.thema, d.unterordner));
+  const namen = (liste, quelle) => (liste || []).map((k) => ((quelle[k] || {}).name || k));
+  if ((d.personen || []).length) teile.push('Personen: ' + namen(d.personen, zustand.personen).join(', '));
+  if ((d.weitere_themen || []).length) teile.push('auch: ' + namen(d.weitere_themen, zustand.themen).join(', '));
+  if ((d.objekte || []).length) teile.push('Objekt: ' + namen(d.objekte, zustand.objekte).map((n) => n.split(' (')[0]).join(', '));
+  if ((d.steuer || []).length) teile.push('Steuer: ' + namen(d.steuer, zustand.steuer).join(', '));
+  if (d.mail_drive) teile.push('Mail als PDF');
+  if (d.ohne_anhang) teile.push('auch ohne Anhang');
+  return teile.join(' · ');
 }
 
 async function zeigeRegeln() {
@@ -1554,21 +1684,26 @@ async function zeigeRegeln() {
     const d = await dateiLesen(REGEL_DATEI);
     zustand.regeln = JSON.parse(d.text);
     zustand.regelSha = d.sha;
+    zustand.bestand = null;
+    await bestandLaden();
   } catch (e) { melde(e.message, 'fehler'); return; }
-  const tbody = $('#regel-liste');
-  tbody.textContent = '';
-  zustand.regeln.regeln.forEach((r, i) => {
-    const z = tbody.insertRow();
-    zelle(z, r.name + (r.ohne_anhang ? ' · auch ohne Anhang' : '') + (r.mail_drive ? ' · Mail als PDF' : ''));
-    zelle(z, (r.absender || []).join(', '));
-    zelle(z, (r.empfaenger || []).join(', '));
-    zelle(z, (r.betreff || []).join(', '));
-    zelle(z, pfadText('', r.thema, r.unterordner));
-    zelle(z, (r.personen || zustand.regeln.standard_personen || []).map((k) => (zustand.personen[k] || {}).name || k).join(', '));
-    const td = z.insertCell();
-    td.append(knopf('Ändern', () => regelFormular(i)), knopf('Löschen', () => regelLoeschen(i), 'klein leise'));
+  if (zustand.regeln.version !== 3) melde('Das Regelwerk hat noch das alte Format; es wird beim nächsten Speichern neu angelegt.', 'warn');
+  const liste = $('#regel-liste');
+  liste.textContent = '';
+  const regeln = zustand.regeln.regeln || [];
+  regeln.forEach((r, i) => {
+    const k = el('div', 'karte regel');
+    const { passt, konflikte } = bestandPruefen(r, regeln, zustand.bestand);
+    k.append(el('strong', '', r.name), el('span', 'hinweis', ` · ${ART_NAMEN[r.art || 'ordner']}`));
+    k.append(el('div', '', 'Wenn ' + regelWennText(r)), el('div', '', '→ ' + regelDannText(r)));
+    const info = el('div', 'hinweis', `${passt.length} bisherige Mails passen.`);
+    if (konflikte.length) info.append(el('span', 'fehler', ` ${konflikte.length} Mal Konflikt mit ${[...new Set(konflikte.flatMap((x) => x.regeln))].join(', ')}: bitte nachschärfen.`));
+    if ((r.art || 'ordner') === 'ordner' && !wertImOrdner(r)) info.append(' Kein Wert aus der Mail im Ordnernamen.');
+    k.append(info, el('div', 'knoepfe'));
+    k.lastChild.append(knopf('Ändern', () => regelFormular(i)), knopf('Löschen', () => regelLoeschen(i), 'klein leise'));
+    liste.append(k);
   });
-  $('#verwerfen').value = (zustand.regeln.verwerfen || []).join('\n');
+  if (!regeln.length) liste.append(el('p', 'hinweis', 'Noch keine Regeln. Übernimm unten Vorschläge oder lege eine Regel an einer Mail an („Regel aus dieser Mail“).'));
   $('#regel-form').hidden = true;
   await zeigeVorschlaege();
 }
@@ -1576,99 +1711,223 @@ async function zeigeRegeln() {
 async function zeigeVorschlaege() {
   const text = await dateiOderLeer(VORSCHLAG_DATEI).catch(() => '');
   const daten = text ? JSON.parse(text) : { vorschlaege: [] };
-  const tbody = $('#vorschlag-liste');
-  tbody.textContent = '';
-  $('#vorschlag-bereich').hidden = !daten.vorschlaege.length;
-  for (const v of daten.vorschlaege) {
-    const z = tbody.insertRow();
-    zelle(z, v.absender.join(', '));
-    zelle(z, pfadText('', v.thema, ''));
-    zelle(z, v.unterordner || '');
-    zelle(z, v.grund, 'hinweis');
-    z.insertCell().append(
-      knopf('Übernehmen', () => {
-        regelFormular(-1, v);
-        zustand.regelVonMail = null;
-        zustand.regelVonVorschlag = v;
-      }),
-      knopf('Ablehnen', () => vorschlagErledigt(v, true), 'klein leise'));
+  const liste = $('#vorschlag-liste');
+  liste.textContent = '';
+  const regeln = (zustand.regeln && zustand.regeln.regeln) || [];
+  // Konflikte gegen die aktuellen Regeln und die anderen Vorschlaege neu pruefen
+  const mitPruefung = (daten.vorschlaege || []).map((v) => {
+    const regel = vorschlagRegel(v);
+    const p = bestandPruefen(regel, [...regeln, ...daten.vorschlaege.map(vorschlagRegel)], zustand.bestand || []);
+    return { v, regel, ...p };
+  });
+  $('#vorschlag-bereich').hidden = !mitPruefung.length;
+  const ohneKonflikt = mitPruefung.filter((x) => !x.konflikte.length && !(x.v.ueberschneidung || []).length && (x.passt.length || x.v.herkunft === 'bestand'));
+  $('#vorschlag-alle').hidden = !ohneKonflikt.length;
+  $('#vorschlag-alle').textContent = `Alle ${ohneKonflikt.length} ohne Konflikt übernehmen`;
+  $('#vorschlag-alle').onclick = () => vorschlaegeUebernehmen(ohneKonflikt.map((x) => x.v));
+  $('#vorschlag-zahl').textContent = mitPruefung.length ? `${mitPruefung.length} Vorschläge, ${ohneKonflikt.length} ohne Konflikt.` : '';
+  for (const { v, regel, passt, konflikte } of mitPruefung) {
+    const k = el('div', 'karte regel vorschlag');
+    k.append(el('strong', '', regel.name), el('span', 'hinweis', ` · ${ART_NAMEN[regel.art || 'ordner']}`));
+    k.append(el('div', '', 'Wenn ' + regelWennText(regel)), el('div', '', '→ ' + regelDannText(regel)));
+    k.append(el('div', 'hinweis', `${v.grund || ''}${v.wert_im_ordner === false || ((regel.art || 'ordner') === 'ordner' && !wertImOrdner(regel)) ? ' · kein Wert aus der Mail im Ordnernamen' : ''}`));
+    const bsp = el('details', 'beispiele');
+    bsp.append(el('summary', '', `${passt.length} bisherige Mails passen${konflikte.length ? `, ${konflikte.length} mit Konflikt` : ''}`));
+    const ul = el('ul');
+    for (const e of passt.slice(0, 12)) {
+      const kon = konflikte.find((x) => x.id === e.id);
+      ul.append(el('li', kon ? 'fehler' : '', `${e.datum} · ${e.betreff || '(ohne Betreff)'} · heute: ${e.ziel ? ablageText(e.ziel) : '–'}${kon ? ` · auch Regel ${kon.regeln.join(', ')}` : ''}`));
+    }
+    bsp.append(ul);
+    if (konflikte.length) bsp.open = true;
+    k.append(bsp, el('div', 'knoepfe'));
+    k.lastChild.append(
+      knopf('Übernehmen', () => vorschlaegeUebernehmen([v]), konflikte.length ? 'klein leise' : 'klein'),
+      knopf('Anpassen', () => { regelFormular(-1, regel); zustand.regelVonVorschlag = v; }, 'klein leise'),
+      knopf('Ablehnen', () => vorschlagErledigt([v], true), 'klein leise'));
+    liste.append(k);
   }
 }
 
-// Vorschlag aus der Liste nehmen; abgelehnte Domains merkt sich der Ablauf.
-async function vorschlagErledigt(v, abgelehnt) {
+const vorschlagRegel = (v) => {
+  const r = { name: v.name, art: v.art || 'ordner', wenn: v.wenn || [] };
+  if (v.dann) r.dann = v.dann;
+  return r;
+};
+
+// Vorschlaege als Regeln speichern und aus der Liste nehmen: ein Commit.
+async function vorschlaegeUebernehmen(liste) {
   try {
+    const namen = new Set(liste.map((v) => v.name));
+    await commitMehrere(async () => {
+      const rw = JSON.parse((await dateiLesen(REGEL_DATEI)).text);
+      if (rw.version !== 3) { rw.version = 3; rw.regeln = []; delete rw.verwerfen; delete rw.pruefen; }
+      const vorhanden = new Set(rw.regeln.map((r) => r.name));
+      for (const v of liste) if (!vorhanden.has(v.name)) rw.regeln.push(vorschlagRegel(v));
+      const vd = JSON.parse(await dateiOderLeer(VORSCHLAG_DATEI) || '{"abgelehnt":[],"vorschlaege":[]}');
+      vd.vorschlaege = vd.vorschlaege.filter((x) => !namen.has(x.name));
+      return [{ pfad: REGEL_DATEI, text: JSON.stringify(rw, null, 2) + '\n' },
+        { pfad: VORSCHLAG_DATEI, text: JSON.stringify(vd, null, 2) + '\n' }];
+    }, `regeln: ${liste.length === 1 ? liste[0].name : liste.length + ' Vorschläge'} übernommen (Web)`);
+    melde(`${liste.length} Regel${liste.length === 1 ? '' : 'n'} übernommen.`, 'gut');
+    await zeigeRegeln();
+  } catch (e) { melde(e.message, 'fehler'); }
+}
+
+// Vorschlaege aus der Liste nehmen; abgelehnte merkt sich der Ablauf.
+async function vorschlagErledigt(liste, abgelehnt) {
+  try {
+    const namen = new Set(liste.map((v) => v.name));
     const d = await dateiLesen(VORSCHLAG_DATEI);
     const daten = JSON.parse(d.text);
-    daten.vorschlaege = daten.vorschlaege.filter((x) => x.absender.join() !== v.absender.join());
-    if (abgelehnt) daten.abgelehnt = [...new Set([...(daten.abgelehnt || []), ...v.absender])];
+    daten.vorschlaege = daten.vorschlaege.filter((x) => !namen.has(x.name));
+    if (abgelehnt) daten.abgelehnt = [...new Set([...(daten.abgelehnt || []), ...namen])];
     await dateiSchreiben(VORSCHLAG_DATEI, JSON.stringify(daten, null, 2) + '\n', d.sha,
-      `regeln: Vorschlag ${v.name} ${abgelehnt ? 'abgelehnt' : 'übernommen'} (Web)`);
-    if (abgelehnt) melde(`Vorschlag ${v.name} abgelehnt.`, 'gut');
+      `regeln: Vorschlag ${[...namen].join(', ')} ${abgelehnt ? 'abgelehnt' : 'übernommen'} (Web)`);
+    if (abgelehnt) melde(`Vorschlag ${[...namen].join(', ')} abgelehnt.`, 'gut');
     await zeigeVorschlaege();
   } catch (e) { melde(e.message, 'fehler'); }
 }
 
+// --- Regel-Formular ----------------------------------------------------------
+
+function bedingungZeile(b = {}) {
+  const z = el('div', 'reihe bedingung');
+  const teil = document.createElement('select');
+  for (const [k, n] of Object.entries(TEIL_NAMEN)) teil.add(new Option(n, k, false, k === (b.teil || 'absender')));
+  const vgl = document.createElement('select');
+  for (const [k, n] of Object.entries(VERGLEICH_NAMEN)) vgl.add(new Option(n, k, false, k === (b.vergleich || 'wort')));
+  const werte = document.createElement('input');
+  werte.placeholder = 'Wert(e), mit Komma trennen';
+  werte.value = (b.werte || []).join(', ');
+  const weg = knopf('×', () => { z.remove(); regelLivePruefen(); }, 'klein leise');
+  weg.title = 'Bedingung entfernen';
+  z.append(teil, vgl, werte, weg);
+  z.wert = () => ({ teil: teil.value, vergleich: vgl.value, werte: werte.value.split(',').map((s) => s.trim()).filter(Boolean) });
+  z.addEventListener('input', regelLivePruefen);
+  z.addEventListener('change', regelLivePruefen);
+  return z;
+}
+
 function regelFormular(index, vorlage) {
   const f = $('#regel-form');
-  const r = index >= 0 ? zustand.regeln.regeln[index] : (vorlage || { personen: zustand.regeln.standard_personen || [] });
+  const r = index >= 0 ? zustand.regeln.regeln[index] : (vorlage || { art: 'ordner', wenn: [{ teil: 'absender', vergleich: 'wort', werte: [] }], dann: {} });
   if (!vorlage) { zustand.regelVonMail = null; zustand.regelVonVorschlag = null; }
   zustand.bearbeitet = index;
+  const d = r.dann || {};
   $('#regel-form-titel').textContent = index >= 0 ? 'Regel ändern' : 'Neue Regel';
   f.name.value = r.name || '';
-  f.absender.value = (r.absender || []).join(', ');
-  f.betreff.value = (r.betreff || []).join(', ');
-  f.empfaenger.value = (r.empfaenger || []).join(', ');
-  f.ohne_anhang.checked = !!r.ohne_anhang;
-  f.mail_drive.checked = !!r.mail_drive;
-  f.unterordner.value = r.unterordner || '';
+  f.art.value = r.art || 'ordner';
+  const bed = $('#regel-bedingungen');
+  bed.textContent = '';
+  for (const b of r.wenn || []) bed.append(bedingungZeile(b));
+  f.ohne_anhang.checked = !!d.ohne_anhang;
+  f.mail_drive.checked = !!d.mail_drive;
+  f.unterordner.value = d.unterordner || '';
   f.thema.textContent = '';
   for (const [schluessel, t] of Object.entries(zustand.themen)) {
-    f.thema.add(new Option(t.name || schluessel, schluessel, false, schluessel === r.thema));
+    f.thema.add(new Option(t.name || schluessel, schluessel, false, schluessel === d.thema));
   }
   const box = $('#regel-personen');
   box.textContent = '';
-  const aktiv = r.personen || zustand.regeln.standard_personen || [];
   for (const [schluessel, p] of Object.entries(zustand.personen)) {
     const l = document.createElement('label');
     const c = document.createElement('input');
     c.type = 'checkbox';
     c.value = schluessel;
-    c.checked = aktiv.includes(schluessel);
+    c.checked = (d.personen || []).includes(schluessel);
     l.append(c, ' ' + (p.name || schluessel));
     box.append(l);
   }
   const bz = $('#regel-bezuege');
   bz.textContent = '';
-  zustand.regelBezuege = bezuegeFelder(r);
+  zustand.regelBezuege = bezuegeFelder(d);
   bz.append(zustand.regelBezuege);
   $('#regel-fehler').textContent = '';
-  regelPfadZeigen();
+  regelArtZeigen();
   f.hidden = false;
   f.scrollIntoView({ behavior: 'smooth' });
+}
+
+function regelArtZeigen() {
+  const f = $('#regel-form');
+  const art = f.art.value;
+  $('#regel-ordner').hidden = art !== 'ordner';
+  $('#regel-merkmale').hidden = art === 'aussortieren';
+  regelPfadZeigen();
+  regelLivePruefen();
 }
 
 function regelPfadZeigen() {
   const f = $('#regel-form');
   const jahr = new Date().getFullYear();
-  $('#regel-pfad').textContent = f.thema.value
+  $('#regel-pfad').textContent = f.art.value === 'ordner' && f.thema.value
     ? `Kommt nach: ${pfadText(jahr, f.thema.value, unterordnerEinsetzen(f.unterordner.value, `${jahr}-01-01`))} (Jahresordner nach Zugehörigkeit)` : '';
 }
 
-const liste = (text) => text.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+function regelAusFormular() {
+  const f = $('#regel-form');
+  const regel = { name: f.name.value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, ''), art: f.art.value,
+    wenn: [...$('#regel-bedingungen').children].map((z) => z.wert()).filter((b) => b.werte.length) };
+  if (regel.art === 'aussortieren') return regel;
+  const dann = {};
+  if (regel.art === 'ordner') {
+    dann.thema = f.thema.value;
+    if (f.unterordner.value.trim()) dann.unterordner = f.unterordner.value.trim().replace(/^\/+|\/+$/g, '');
+  }
+  const personen = [...$('#regel-personen').querySelectorAll('input:checked')].map((c) => c.value);
+  if (personen.length) dann.personen = personen;
+  for (const [feld, werte] of Object.entries(zustand.regelBezuege ? zustand.regelBezuege.werte() : {})) {
+    const rein = werte.filter((x) => x !== dann.thema);
+    if (rein.length) dann[feld] = rein;
+  }
+  if (f.ohne_anhang.checked) dann.ohne_anhang = true;
+  if (f.mail_drive.checked) dann.mail_drive = true;
+  regel.dann = dann;
+  return regel;
+}
 
 // Prueft eine Regel; liefert Fehlertext oder ''.
 function regelPruefen(regel, alle, index) {
   if (!regel.name) return 'Name fehlt.';
   if (alle.some((r, i) => i !== index && r.name === regel.name)) return 'Name ist schon vergeben.';
-  if (!regel.absender && !regel.betreff && !regel.empfaenger) return 'Mindestens Absender, Empfänger oder Betreff angeben.';
-  if (!(regel.thema in zustand.themen)) return 'Thema unbekannt.';
-  if (!regel.personen || !regel.personen.length) return 'Mindestens eine Person wählen.';
-  if (!unterordnerGueltig(regel.unterordner)) return 'Unterordner ungültig (keine leeren Teile, kein ..).';
+  if (!regel.wenn.some((b) => b.vergleich !== 'nicht')) return 'Mindestens eine Bedingung, die etwas verlangt (nicht nur „enthält nicht“).';
+  for (const b of regel.wenn) {
+    if (b.vergleich === 'nummer' && b.werte.some((w) => !nummerMuster(w))) return 'Eine Nummer braucht mindestens 5 Zeichen.';
+  }
+  const d = regel.dann || {};
+  if (regel.art === 'ordner') {
+    if (!(d.thema in zustand.themen)) return 'Thema unbekannt.';
+    if (!unterordnerGueltig(d.unterordner)) return 'Unterordner ungültig (keine leeren Teile, kein ..).';
+  }
+  if (regel.art === 'merkmal' && !['personen', 'weitere_themen', 'objekte', 'steuer', 'mail_drive', 'ohne_anhang'].some((k) => d[k] && (d[k].length || d[k] === true))) {
+    return 'Eine Merkmalregel muss etwas ergänzen (Person, Thema, Objekt, Steuer …).';
+  }
   return '';
 }
 
+// Live: auf welche bisherigen Mails passt die Regel, gibt es Konflikte?
+function regelLivePruefen() {
+  const ziel = $('#regel-pruefung');
+  if (!ziel || $('#regel-form').hidden) return;
+  const regel = regelAusFormular();
+  ziel.textContent = '';
+  if (!regel.wenn.length) { ziel.append(el('p', 'hinweis', 'Noch keine Bedingung.')); return; }
+  const andere = (zustand.regeln.regeln || []).filter((_, i) => i !== zustand.bearbeitet);
+  const { passt, konflikte } = bestandPruefen(regel, andere, zustand.bestand || []);
+  ziel.append(el('p', konflikte.length ? 'fehler' : 'hinweis',
+    `${passt.length} bisherige Mails passen.${konflikte.length ? ` ${konflikte.length} davon passen auch zu einer anderen Regel: bitte nachschärfen (z. B. eine weitere Bedingung oder „enthält nicht“).` : ''}`));
+  if (regel.art === 'ordner' && !wertImOrdner(regel)) ziel.append(el('p', 'hinweis', 'Tipp: Der Unterordner sollte einen Wert aus der Mail enthalten (Vertrags-, Kundennummer oder Name), z. B. „HUK_Kfz_624_220429-P“.'));
+  const ul = el('ul');
+  for (const e of passt.slice(0, 10)) {
+    const kon = konflikte.find((x) => x.id === e.id);
+    ul.append(el('li', kon ? 'fehler' : '', `${e.datum} · ${e.betreff || '(ohne Betreff)'} · heute: ${e.ziel ? ablageText(e.ziel) : '–'}${kon ? ` · auch Regel ${kon.regeln.join(', ')}` : ''}`));
+  }
+  ziel.append(ul);
+}
+
 async function regelnSpeichern(nachricht) {
+  if (zustand.regeln.version !== 3) zustand.regeln = { version: 3, standard_personen: zustand.regeln.standard_personen || [], regeln: [] };
   zustand.regelSha = await dateiSchreiben(REGEL_DATEI, JSON.stringify(zustand.regeln, null, 2) + '\n',
     zustand.regelSha, nachricht);
   melde('Gespeichert: ' + nachricht, 'gut');
@@ -1677,22 +1936,13 @@ async function regelnSpeichern(nachricht) {
 
 async function regelAbsenden(ereignis) {
   ereignis.preventDefault();
-  const f = $('#regel-form');
-  const regel = { name: f.name.value.trim().toLowerCase().replace(/\s+/g, '-') };
-  if (liste(f.absender.value).length) regel.absender = liste(f.absender.value);
-  if (liste(f.empfaenger.value).length) regel.empfaenger = liste(f.empfaenger.value);
-  if (liste(f.betreff.value).length) regel.betreff = liste(f.betreff.value);
-  if (f.ohne_anhang.checked) regel.ohne_anhang = true;
-  if (f.mail_drive.checked) regel.mail_drive = true;
-  regel.thema = f.thema.value;
-  if (f.unterordner.value.trim()) regel.unterordner = f.unterordner.value.trim();
-  regel.personen = [...$('#regel-personen').querySelectorAll('input:checked')].map((c) => c.value);
-  for (const [feld, werte] of Object.entries(zustand.regelBezuege ? zustand.regelBezuege.werte() : {})) {
-    const rein = werte.filter((x) => x !== regel.thema);
-    if (rein.length) regel[feld] = rein;
-  }
-  const fehler = regelPruefen(regel, zustand.regeln.regeln, zustand.bearbeitet);
+  const regel = regelAusFormular();
+  const fehler = regelPruefen(regel, zustand.regeln.regeln || [], zustand.bearbeitet);
   if (fehler) { $('#regel-fehler').textContent = fehler; return; }
+  const andere = (zustand.regeln.regeln || []).filter((_, i) => i !== zustand.bearbeitet);
+  const { konflikte } = bestandPruefen(regel, andere, zustand.bestand || []);
+  if (konflikte.length && !confirm(`${konflikte.length} bisherige Mails passen auch zu ${[...new Set(konflikte.flatMap((x) => x.regeln))].join(', ')}. Solche Mails landen dann in „Zu erledigen“. Trotzdem speichern?`)) return;
+  if (zustand.regeln.version !== 3) zustand.regeln = { version: 3, standard_personen: zustand.regeln.standard_personen || [], regeln: [] };
   if (zustand.bearbeitet >= 0) zustand.regeln.regeln[zustand.bearbeitet] = regel;
   else zustand.regeln.regeln.push(regel);
   try {
@@ -1701,9 +1951,12 @@ async function regelAbsenden(ereignis) {
     zustand.regelVonMail = null;
     const vorschlag = zustand.regelVonVorschlag;
     zustand.regelVonVorschlag = null;
-    if (vorschlag) await vorschlagErledigt(vorschlag, false);
-    if (mail) {
-      await eingangAblegen(mail, regel, 'regel/' + regel.name);
+    if (vorschlag) await vorschlagErledigt([vorschlag], false);
+    if (mail && regel.art === 'ordner') {
+      const d = regel.dann;
+      await eingangAblegen(mail, { thema: d.thema, unterordner: d.unterordner || '', personen: d.personen || zustand.regeln.standard_personen || [],
+        weitere_themen: d.weitere_themen, objekte: d.objekte, steuer: [...new Set([...(d.steuer || []), ...ordnerPosten(d.thema, d.unterordner)])],
+        mail_drive: !!d.mail_drive }, 'regel/' + regel.name);
       melde(`Regel ${regel.name} gespeichert und Mail abgelegt.`, 'gut');
     }
   } catch (e) { $('#regel-fehler').textContent = e.message; }
@@ -1716,9 +1969,151 @@ async function regelLoeschen(index) {
   try { await regelnSpeichern(`regeln: ${r.name} gelöscht (Web)`); } catch (e) { melde(e.message, 'fehler'); }
 }
 
-async function verwerfenSpeichern() {
-  zustand.regeln.verwerfen = $('#verwerfen').value.split('\n').map((s) => s.trim().toLowerCase()).filter(Boolean);
-  try { await regelnSpeichern('regeln: Verwerfen-Liste geändert (Web)'); } catch (e) { melde(e.message, 'fehler'); }
+// Regel aus einer Mail: steht eine Nummer aus dem gewaehlten Ordnernamen in der
+// Mail, ist sie die Bedingung (ableitbar); sonst die Absender-Domain.
+async function regelAusMail(e, w) {
+  const teile = teileVon(e);
+  const adresse = teile.absender;
+  const domain = adresse.split('@')[1] || adresse;
+  const uo = String(w.unterordner || '');
+  const nummer = [...String(uo).matchAll(/[A-Za-z0-9]*\d[A-Za-z0-9]*(?:[\s/._-]+[A-Za-z0-9]*\d[A-Za-z0-9]*)*/g)].map((m) => m[0])
+    .filter((z) => z.replace(/\D/g, '').length >= 5).find((z) => wertPasst('nummer', z, falten(teilText(teile, 'ueberall'))));
+  const wenn = nummer ? [{ teil: 'ueberall', vergleich: 'nummer', werte: [nummer] }] : [{ teil: 'absender', vergleich: 'wort', werte: [domain] }];
+  const name = falten(uo.split('/').pop() || domain.split('.').slice(-2, -1)[0] || domain).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  await zeigeReiter('einrichtung', 'regeln');
+  zustand.regelVonMail = e;
+  zustand.regelVonVorschlag = null;
+  const dann = { thema: w.thema, unterordner: w.unterordner, personen: w.personen, weitere_themen: w.weitere_themen, objekte: w.objekte, steuer: w.steuer };
+  if (e.meta.ohne_anhang) dann.ohne_anhang = true;
+  if (w.mail_drive) dann.mail_drive = true;
+  regelFormular(-1, { name, art: 'ordner', wenn, dann });
+  $('#regel-form-titel').textContent = `Neue Regel aus Mail „${titelVon(e.text)}“`;
+  melde('Prüfe die Regel. Beim Speichern wird auch diese Mail abgelegt.');
+}
+
+// Werbung: Absender in die Aussortier-Regel "werbung" aufnehmen
+async function aussortierenAufnehmen(adresse) {
+  const rw = JSON.parse((await dateiLesen(REGEL_DATEI)).text);
+  if (rw.version !== 3) { rw.version = 3; rw.regeln = []; delete rw.verwerfen; delete rw.pruefen; }
+  let r = rw.regeln.find((x) => x.name === 'werbung' && x.art === 'aussortieren');
+  if (!r) { r = { name: 'werbung', art: 'aussortieren', wenn: [{ teil: 'absender', vergleich: 'wort', werte: [] }] }; rw.regeln.push(r); }
+  if (!r.wenn[0].werte.includes(adresse)) r.wenn[0].werte.push(adresse);
+  return { pfad: REGEL_DATEI, text: JSON.stringify(rw, null, 2) + '\n' };
+}
+
+// --- Steuer --------------------------------------------------------------------
+// Uebersicht je Jahr und Person, gebaut vom Abruf (second-brain steuer -> steuer/<jahr>.json).
+
+async function zeigeSteuer() {
+  const ziel = $('#steuer-inhalt');
+  ziel.textContent = 'Lade …';
+  let jahre = [];
+  try {
+    await stammdatenLaden();
+    const liste = await gh(`/repos/${zustand.repo}/contents/steuer`).catch(() => []);
+    jahre = liste.map((d) => d.name).filter((n) => /^\d{4}\.json$/.test(n)).map((n) => Number(n.slice(0, 4))).sort((a, b) => b - a);
+  } catch (e) { ziel.textContent = ''; melde(e.message, 'fehler'); return; }
+  const wahl = $('#steuer-jahr');
+  const vorher = Number(wahl.value || lade('sb-steuer-jahr'));
+  wahl.textContent = '';
+  for (const j of jahre) wahl.add(new Option(String(j), String(j)));
+  if (jahre.includes(vorher)) wahl.value = String(vorher);
+  postenVorschlaegeZeigen();
+  if (!jahre.length) { ziel.textContent = 'Noch keine Belege mit Steuerbezug. Der nächste Abruf baut die Übersicht.'; return; }
+  await steuerJahrZeigen(Number(wahl.value));
+}
+
+const ANLAGEN = {
+  N: 'Anlage N (Arbeitnehmer)', V: 'Anlage V (Vermietung)', KAP: 'Anlage KAP (Kapitalerträge)',
+  R: 'Anlage R (Renten)', SA: 'Sonderausgaben', VOR: 'Vorsorgeaufwand', AB: 'Außergewöhnliche Belastungen',
+  '35a': 'Haushaltsnahe Dienstleistungen, Handwerker (§35a)', USt: 'Umsatzsteuer (Solaranlage)',
+  'EÜR': 'Gewinnermittlung (Solaranlage)',
+};
+
+async function steuerJahrZeigen(jahr) {
+  merke('sb-steuer-jahr', String(jahr));
+  const ziel = $('#steuer-inhalt');
+  ziel.textContent = 'Lade …';
+  let d, csv;
+  try {
+    [d, csv] = await Promise.all([dateiLesen(`steuer/${jahr}.json`).then((x) => JSON.parse(x.text)), dateiOderLeer(`steuer/${jahr}.csv`)]);
+  } catch (e) { ziel.textContent = ''; melde(e.message, 'fehler'); return; }
+  ziel.textContent = '';
+  const kopf = el('div', 'knoepfe');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = `steuer-${jahr}.csv`;
+  a.textContent = `Liste ${jahr} für WISO herunterladen (CSV)`;
+  kopf.append(a, el('span', 'hinweis', `Stand ${d.stand}`));
+  ziel.append(kopf);
+  const euro = (x) => (typeof x === 'number' ? x.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' }) : '–');
+  for (const [person, anlagen] of Object.entries(d.personen || {})) {
+    const k = el('div', 'karte');
+    k.append(el('h3', '', (zustand.personen[person] || {}).name || person));
+    for (const [anlage, posten] of Object.entries(anlagen).sort()) {
+      k.append(el('h4', '', ANLAGEN[anlage] || anlage));
+      const tab = document.createElement('table');
+      tab.innerHTML = '<thead><tr><th>Posten</th><th>Belege</th><th>Summe</th></tr></thead>';
+      const tb = tab.createTBody();
+      for (const [schluessel, e] of Object.entries(posten)) {
+        const z = tb.insertRow();
+        const p = (d.posten || {})[schluessel] || zustand.steuer[schluessel] || {};
+        const det = el('details');
+        det.append(el('summary', '', p.posten ? `${p.posten}${p.objekt ? ` (${((zustand.objekte[p.objekt] || {}).name || p.objekt).split(' (')[0]})` : ''}` : e.name));
+        const ul = el('ul');
+        for (const b of e.belege) {
+          const li = el('li');
+          li.append(`${b.datum} · `, b.link ? link(b.titel, b.link) : b.titel, ` · ${euro(b.betrag)}${b.lohnanteil ? ` (Lohn ${euro(b.lohnanteil)})` : ''}`);
+          ul.append(li);
+        }
+        det.append(ul);
+        z.insertCell().append(det);
+        zelle(z, String(e.belege.length));
+        zelle(z, euro(e.summe) + (e.belege.some((b) => typeof b.betrag !== 'number') ? ' (ohne Betrag: ' + e.belege.filter((b) => typeof b.betrag !== 'number').length + ')' : ''));
+      }
+      k.append(tab);
+    }
+    const fehlt = (d.fehlend || {})[person] || [];
+    if (fehlt.length) {
+      k.append(el('h4', 'warn', 'Im Vorjahr da, dieses Jahr noch ohne Beleg'));
+      const ul = el('ul');
+      for (const s of fehlt) ul.append(el('li', '', (zustand.steuer[s] || {}).name || s));
+      k.append(ul);
+    }
+    ziel.append(k);
+  }
+}
+
+// Neue Steuerposten, die die KI vorgeschlagen hat: gelten erst nach Uebernahme.
+function postenVorschlaegeZeigen() {
+  const box = $('#posten-vorschlaege');
+  box.textContent = '';
+  const liste = (zustand.steuerConfig || {}).vorschlaege || [];
+  if (!liste.length) return;
+  box.append(el('h3', '', 'Neue Steuerposten (Vorschläge)'));
+  for (const v of liste) {
+    const k = el('div', 'karte zeile');
+    k.append(el('span', '', `${v.schluessel}: ${[v.person, v.anlage, v.objekt, v.posten].filter(Boolean).join(' · ')}${v.grund ? ` – ${v.grund}` : ''}`),
+      knopf('Übernehmen', () => postenVorschlag(v, true)), knopf('Ablehnen', () => postenVorschlag(v, false), 'klein leise'));
+    box.append(k);
+  }
+}
+
+async function postenVorschlag(v, uebernehmen) {
+  try {
+    await commitMehrere(async () => {
+      const alt = await dateiOderLeer(STEUER_DATEI);
+      const cfg = jsyaml.load(alt) || {};
+      cfg.vorschlaege = (cfg.vorschlaege || []).filter((x) => x.schluessel !== v.schluessel);
+      if (uebernehmen) {
+        cfg.posten = cfg.posten || {};
+        const { schluessel, grund, ...p } = v;
+        cfg.posten[schluessel] = p;
+      }
+      return [{ pfad: STEUER_DATEI, text: mitKopf(alt, cfg, 'posten') }];
+    }, `steuerposten: ${v.schluessel} ${uebernehmen ? 'übernommen' : 'abgelehnt'} (Web)`);
+    await zeigeSteuer();
+  } catch (e) { melde(e.message, 'fehler'); }
 }
 
 // Einstellungsdateien (Rohtext mit Pruefung)
@@ -1796,7 +2191,6 @@ function zeigeTeil(name) {
   merke('sb-teil', name);
   return ({
     regeln: zeigeRegeln,
-    vertraege: zeigeVertraege,
     ordner: zeigeOrdner,
     personen: zeigePersonen,
     zugang: () => { driveCodeZeigen(); kontenZeigen(); return zeigeSecrets(); },
@@ -1817,84 +2211,6 @@ async function regelnLaden() {
     zustand.regeln = JSON.parse(d.text);
     zustand.regelSha = d.sha;
   }
-}
-
-// Vertraege
-
-async function zeigeVertraege() {
-  const liste = $('#vertrag-liste');
-  liste.textContent = 'Lade …';
-  try { await stammdatenLaden(); await regelnLaden(); } catch (e) { melde(e.message, 'fehler'); return; }
-  liste.textContent = '';
-  zustand.vertraege.forEach((v, i) => {
-    const k = el('div', 'karte zeile');
-    const text = el('div');
-    text.append(el('strong', '', `${v.nummer}`), ` ${v.name || ''}`, el('div', 'hinweis', `→ ${pfadText('', v.thema, v.unterordner)}`));
-    k.append(text, knopf('Ändern', () => vertragFormular(i), 'klein leise'), knopf('Löschen', () => vertragLoeschen(i), 'klein leise'));
-    liste.append(k);
-  });
-  if (!zustand.vertraege.length) liste.append(el('p', 'hinweis', 'Noch keine Verträge.'));
-  $('#vertrag-form').hidden = true;
-}
-
-function vertragFormular(index) {
-  const f = $('#vertrag-form');
-  const v = index >= 0 ? zustand.vertraege[index] : {};
-  zustand.vertragIndex = index;
-  $('#vertrag-form-titel').textContent = index >= 0 ? 'Vertrag ändern' : 'Neuer Vertrag';
-  f.nummer.value = v.nummer || '';
-  f.name.value = v.name || '';
-  f.auch.value = (v.auch || []).join(', ');
-  const box = $('#vertrag-ordner');
-  box.textContent = '';
-  zustand.vertragFelder = auswahlFelder({ thema: v.thema, unterordner: v.unterordner || '', personen: v.personen,
-    weitere_themen: v.weitere_themen, objekte: v.objekte, steuer: v.steuer }, { betreff: v.name || '', text: String(v.nummer || '') });
-  box.append(zustand.vertragFelder);
-  $('#vertrag-fehler').textContent = '';
-  f.hidden = false;
-  f.scrollIntoView({ behavior: 'smooth' });
-}
-
-async function vertragSpeichern(ev) {
-  ev.preventDefault();
-  const f = $('#vertrag-form');
-  const w = zustand.vertragFelder.wert();
-  const v = { nummer: f.nummer.value.trim(), name: f.name.value.trim(), thema: w.thema };
-  if (!v.nummer || v.nummer.replace(/[^0-9a-z]/gi, '').length < 5) { $('#vertrag-fehler').textContent = 'Die Nummer braucht mindestens 5 Ziffern oder Buchstaben.'; return; }
-  if (!(w.thema in zustand.themen)) { $('#vertrag-fehler').textContent = 'Bitte einen Ordner wählen.'; return; }
-  if (w.unterordner.trim()) v.unterordner = w.unterordner.trim();
-  const auch = f.auch.value.split(',').map((x) => x.trim()).filter(Boolean);
-  if (auch.length) v.auch = auch;
-  if (w.personen.length && JSON.stringify(w.personen) !== JSON.stringify(zustand.regeln.standard_personen || [])) v.personen = w.personen;
-  for (const feld of ['weitere_themen', 'objekte', 'steuer']) {
-    const x = (w[feld] || []).filter((t) => t !== w.thema);
-    if (x.length) v[feld] = x;
-  }
-  try {
-    await commitMehrere(async () => {
-      const alt = await dateiOderLeer(VERTRAG_DATEI);
-      const liste = (jsyaml.load(alt) || {}).vertraege || [];
-      const i = zustand.vertragIndex;
-      if (i >= 0 && liste[i] && String(liste[i].nummer) === String(zustand.vertraege[i].nummer)) liste[i] = v; else liste.push(v);
-      return [{ pfad: VERTRAG_DATEI, text: mitKopf(alt, { vertraege: liste }, 'vertraege') }, ...await ordnerMerken(w.thema, w.unterordner)];
-    }, `vertraege: ${v.nummer} ${zustand.vertragIndex >= 0 ? 'geändert' : 'neu'} (Web)`);
-    melde(`Vertrag ${v.nummer} gespeichert.`, 'gut');
-    await zeigeVertraege();
-  } catch (e) { $('#vertrag-fehler').textContent = e.message; }
-}
-
-async function vertragLoeschen(index) {
-  const v = zustand.vertraege[index];
-  if (!confirm(`Vertrag ${v.nummer} löschen? Die Ablage in Drive bleibt, nur die Erkennung entfällt.`)) return;
-  try {
-    await commitMehrere(async () => {
-      const alt = await dateiOderLeer(VERTRAG_DATEI);
-      const liste = ((jsyaml.load(alt) || {}).vertraege || []).filter((x) => String(x.nummer) !== String(v.nummer));
-      return [{ pfad: VERTRAG_DATEI, text: mitKopf(alt, { vertraege: liste }, 'vertraege') }];
-    }, `vertraege: ${v.nummer} gelöscht (Web)`);
-    melde(`Vertrag ${v.nummer} gelöscht.`, 'gut');
-    await zeigeVertraege();
-  } catch (e) { melde(e.message, 'fehler'); }
 }
 
 // Ordner
@@ -2081,13 +2397,14 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('#unterreiter button').forEach((b) => b.addEventListener('click', () => zeigeTeil(b.dataset.teil)));
   let suchTimer = null;
   $('#such-feld').addEventListener('input', () => { clearTimeout(suchTimer); suchTimer = setTimeout(suchen, 250); });
-  $('#vertrag-neu').addEventListener('click', async () => { await stammdatenLaden(); await regelnLaden(); vertragFormular(-1); });
-  $('#vertrag-abbrechen').addEventListener('click', () => { $('#vertrag-form').hidden = true; });
-  $('#vertrag-form').addEventListener('submit', vertragSpeichern);
   $('#ordner-form').addEventListener('submit', ordnerEintragen);
   $('#person-form').addEventListener('submit', personNeu);
   $('#regel-form').thema.addEventListener('change', regelPfadZeigen);
-  $('#regel-form').unterordner.addEventListener('input', regelPfadZeigen);
+  $('#regel-form').unterordner.addEventListener('input', () => { regelPfadZeigen(); regelLivePruefen(); });
+  $('#regel-form').art.addEventListener('change', regelArtZeigen);
+  $('#regel-form').addEventListener('change', regelLivePruefen);
+  $('#regel-bedingung-neu').addEventListener('click', () => { $('#regel-bedingungen').append(bedingungZeile({ teil: 'betreff' })); regelLivePruefen(); });
+  $('#steuer-jahr').addEventListener('change', () => steuerJahrZeigen(Number($('#steuer-jahr').value)));
   $('#anmeldung-form').addEventListener('submit', anmelden);
   $('#abmelden').addEventListener('click', abmelden);
   $('#secret-neu-form').addEventListener('submit', weiteresSecretSpeichern);
@@ -2101,7 +2418,6 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#regel-neu').addEventListener('click', () => regelFormular(-1));
   $('#regel-abbrechen').addEventListener('click', () => { $('#regel-form').hidden = true; zustand.regelVonMail = null; });
   $('#regel-form').addEventListener('submit', regelAbsenden);
-  $('#verwerfen-speichern').addEventListener('click', verwerfenSpeichern);
   $('#datei-wahl').addEventListener('change', zeigeDatei);
   $('#datei-speichern').addEventListener('click', dateiSpeichern);
   $('#mail-starten').addEventListener('click', mailStarten);
