@@ -186,6 +186,21 @@ def _konflikte(args):
     return 1 if gesamt and args.streng else 0
 
 
+def _neuaufbau(args):
+    """Regelvorschlaege aus Ordnerliste und Bestand neu aufbauen (ADR 0004)."""
+    from . import neuaufbau
+    neu, ohne = neuaufbau.schreiben(args.daten)
+    for v in neu:
+        print('%-28s %-40s -> %s/%s  (%d Mails, %d Konflikte)' % (
+            v['name'], '; '.join('%s %s %s' % (b['teil'], b['vergleich'], ', '.join(b['werte']))
+                                 for b in v['wenn']),
+            v['dann']['thema'], v['dann']['unterordner'], v.get('passt', 0),
+            len(v.get('konflikte') or [])))
+    print('%d Vorschlaege, %d Ordner ohne Vorschlag (KI schlaegt vor, sobald Mails kommen)'
+          % (len(neu), len(ohne)))
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog='second-brain')
     sub = p.add_subparsers(dest='befehl', required=True)
@@ -222,6 +237,11 @@ def main(argv=None):
     kf.add_argument('daten', help='Pfad zum Daten-Repo')
     kf.add_argument('--streng', action='store_true', help='bei Konflikten mit Fehler beenden')
     kf.set_defaults(fn=_konflikte)
+
+    na = sub.add_parser('neuaufbau',
+                        help='Regelvorschlaege aus Ordnerliste und Bestand neu aufbauen')
+    na.add_argument('daten', help='Pfad zum Daten-Repo')
+    na.set_defaults(fn=_neuaufbau)
 
     ma = sub.add_parser('mail-abruf', help='Mails abholen und ablegen (IMAP oder .eml-Ordner)')
     ma.add_argument('daten', help='Pfad zum Daten-Repo')

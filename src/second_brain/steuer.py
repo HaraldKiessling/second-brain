@@ -97,6 +97,9 @@ def _link(meta):
         return 'https://drive.google.com/file/d/%s' % next(iter(dateien.values()))
     if meta.get('mail_pdf_id'):
         return 'https://drive.google.com/file/d/%s' % meta['mail_pdf_id']
+    ordner = str(meta.get('drive') or '').split(':')[0]
+    if ordner:
+        return 'https://drive.google.com/drive/folders/%s' % ordner
     return ''
 
 
