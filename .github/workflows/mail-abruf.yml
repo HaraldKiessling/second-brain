@@ -47,6 +47,9 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install "${{ inputs.code }}"
+      - name: Texterkennung installieren
+        # PDF-Text (poppler) und Texterkennung fuer gescannte Anhaenge (Tesseract, deutsch)
+        run: sudo apt-get install -y -qq poppler-utils tesseract-ocr tesseract-ocr-deu >/dev/null
       - name: Abrufen
         env:
           MAIL_USER: ${{ secrets.MAIL_USER }}
@@ -78,7 +81,9 @@ jobs:
           DRIVE_SKRIPT_URL: ${{ secrets.DRIVE_SKRIPT_URL }}
           DRIVE_SCHLUESSEL: ${{ secrets.DRIVE_SCHLUESSEL }}
         run: second-brain drive . --anhaenge "$RUNNER_TEMP/anhaenge"
+      - run: second-brain bestand .
       - run: second-brain regelvorschlaege .
+      - run: second-brain steuer .
       - run: second-brain pruefen .
       - name: Speichern
         run: |

@@ -17,9 +17,13 @@ def test_doppelte_id_und_falsche_regel(tmp_path):
     shutil.copy(quelle, quelle.with_name('kopie.md'))
     regel = ziel / 'regeln' / 'mail.json'
     regel.write_text(regel.read_text().replace('"thema": "steuer"', '"thema": "gibtsnicht"'))
+    posten = ziel / 'config' / 'steuerposten.yaml'
+    posten.write_text(posten.read_text().replace('edv/hoster: [anna.n.arbeitsmittel]',
+                                                 'edv/hoster: [anna.gibtsnicht]'))
     meldungen = [m for _, m in daten.pruefen(str(ziel))]
     assert any(m.startswith('id doppelt') for m in meldungen)
-    assert 'Regel finanzamt: Thema unbekannt: gibtsnicht' in meldungen
+    assert 'Regel finanzamt-bescheid: Thema unbekannt: gibtsnicht' in meldungen
+    assert 'Ordner edv/hoster: Posten unbekannt: anna.gibtsnicht' in meldungen
 
 
 def test_cli_pruefen(capsys):

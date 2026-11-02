@@ -1,6 +1,6 @@
 """Mail-Adapter: holt Mails per IMAP (oder aus .eml-Dateien) und legt sie ab.
 
-Pro Mail entscheidet einordnen.py (Regel, Spam, Heuristik, optional KI):
+Pro Mail entscheidet einordnen.py (Spam, Regel, optional KI-Vorschlag):
   verwerfen -> Indexzeile mit Feld "verworfen" (Grund), damit nichts verloren geht
   index     -> eine Zeile in index/mail/<jahr>-<monat>.jsonl
   notiz     -> notizen/<jahr>/<thema>/<id>.md, Eintrag im Aenderungsprotokoll
@@ -31,6 +31,8 @@ from html import escape
 
 import yaml
 
+from . import anhangtext as at
+from . import betrag as bt
 from . import einordnen as eo
 from . import jahr as jz
 from . import notiz as nz
@@ -58,6 +60,7 @@ class Mail:
     kategorie: str = ''                           # Gmail: werbung, sozial
     empfaenger: str = ''                          # An und Cc
     html: str = ''                                # HTML-Fassung, falls vorhanden
+    anhangtext: str = ''                          # Text der Dokumente (PDF/Texterkennung)
 
     @property
     def dokumente(self):
@@ -239,7 +242,8 @@ def jahr_felder(meta, mail, quelle=None):
     jahr = getattr(quelle, 'jahr', 0) or 0
     grund = getattr(quelle, 'jahr_grund', '') if jahr else ''
     if not jahr:
-        jahr, grund = jz.zugehoerigkeit(mail.betreff, mail.text, anhaenge, mail.datum)
+        jahr, grund = jz.zugehoerigkeit(mail.betreff, '\n'.join([mail.text, mail.anhangtext]),
+                                        anhaenge, mail.datum)
     if jahr and jahr != mail.datum.year:
         meta['jahr'] = jahr
         meta['jahr_grund'] = grund or 'laut KI'
@@ -332,6 +336,13 @@ class Ablage:
             meta['anhaenge'] = [os.path.basename(n) for n, _ in mail.dokumente]
         if not mail.hat_dokument:
             meta['ohne_anhang'] = True
+        if mail.empfaenger:
+            meta['empfaenger'] = mail.empfaenger
+        if ergebnis.treffer:
+            meta['regel_treffer'] = [dict(t) for t in ergebnis.treffer]
+        if ergebnis.konflikt:
+            meta['regelkonflikt'] = list(ergebnis.konflikt)
+        meta.update(bt.felder(mail.betreff, mail.text, mail.anhangtext))
         if ergebnis.aktion == regeln.NOTIZ:
             thema = self.themen.get(ergebnis.thema, {})
             jahr = jahr_felder(meta, mail, ergebnis)
@@ -366,12 +377,35 @@ class Ablage:
         with open(pfad, 'w', encoding='utf-8') as fh:
             fh.write(nz.schreiben(nz.Notiz(meta=meta, text=notiz_text(mail))))
         anhaenge_sichern(self.anhang_ziel, nid, mail)
+        anhangtext_sichern(self.wurzel, nid, mail.anhangtext)
         if meta.get('mail_drive'):
             seite_sichern(self.anhang_ziel, nid, mail_seite(
                 mail.absender, mail.datum.isoformat(), mail.betreff, mail.text, mail.html,
                 mail.empfaenger))
         self.bekannt.add(mail.message_id)
         return pfad
+
+
+ANHANGTEXT = 'anhangtext'  # Text der Anhaenge je Notiz/Eingang: anhangtext/<id>.txt
+
+
+def anhangtext_sichern(wurzel, nid, text):
+    """Text der Anhaenge im Daten-Repo merken: fuer Regeln auf den Bestand,
+    Regelkonflikte und die Steuer. Die Dateien selbst liegen nur in Drive."""
+    if not text:
+        return
+    pfad = os.path.join(wurzel, ANHANGTEXT, nid + '.txt')
+    os.makedirs(os.path.dirname(pfad), exist_ok=True)
+    with open(pfad, 'w', encoding='utf-8') as fh:
+        fh.write(text + '\n')
+
+
+def anhangtext_lesen(wurzel, nid):
+    try:
+        with open(os.path.join(wurzel, ANHANGTEXT, nid + '.txt'), encoding='utf-8') as fh:
+            return fh.read()
+    except (FileNotFoundError, TypeError):
+        return ''
 
 
 def notiz_text(mail):
@@ -446,28 +480,32 @@ def _notizen_mit(wurzel, feld, konto):
                     yield pfad, n
 
 
-def neue_vorschlaege(wurzel, konto, ki, vertraege=(), standard_personen=(), heute=None):
+def neue_vorschlaege(wurzel, konto, ki, regelwerk=None, steuerposten=None, heute=None):
     """Neue Ordner-Vorschlaege fuer Mails, bei denen die Web-App sie angefordert hat
     (vorschlag_anfordern: true oder ein Hinweis von Harald). Die KI arbeitet mit dem
-    Notiztext, das Postfach wird nicht gebraucht. Liefert (neu, fehlgeschlagen)."""
+    Notiztext und dem gemerkten Anhangtext, das Postfach wird nicht gebraucht.
+    Liefert (neu, fehlgeschlagen)."""
     neu = fehler = 0
     heute = heute or datetime.date.today()
+    regelwerk = regelwerk or {}
     for pfad, n in list(_notizen_mit(wurzel, 'vorschlag_anfordern', konto)):
         m = n.meta
         hinweis = m.pop('vorschlag_anfordern')
         hinweis = hinweis if isinstance(hinweis, str) else ''
         anhaenge = [str(a) for a in m.get('anhaenge') or []]
-        v = eo.vertrag_finden(vertraege, n.titel, n.text, ' '.join(anhaenge))
-        vorschlag = eo.vertrag_vorschlag(v, standard_personen) if v else None
-        kv = ki.frage(str(m.get('absender') or ''), n.titel, n.text, anhaenge,
-                      hinweis=hinweis) if ki is not None else None
-        if kv is not None and kv.thema:
-            kv = eo.nummer_pruefen(kv, n.titel, n.text, anhaenge)
-            if vorschlag is None:
-                vorschlag = kv
-            else:
-                vorschlag.alternativen = [kv] + kv.alternativen[:1]
-                kv.alternativen = []
+        text = anhangtext_lesen(wurzel, m.get('id'))
+        vorschlag = ki.frage(str(m.get('absender') or ''), n.titel, n.text, anhaenge,
+                             hinweis=hinweis, anhangtext=text) if ki is not None else None
+        if vorschlag is not None and not vorschlag.thema:
+            vorschlag = None
+        if vorschlag is not None:
+            teile = regeln.Teile(absender=str(m.get('absender') or ''),
+                                 empfaenger=str(m.get('empfaenger') or ''), betreff=n.titel,
+                                 text=n.text, anhangname=' '.join(anhaenge), anhangtext=text)
+            regeln.merkmale_anwenden(vorschlag, regeln.auswerten(teile, regelwerk).merkmal,
+                                     regelwerk.get('standard_personen') or [])
+            for x in [vorschlag] + list(vorschlag.alternativen):
+                eo._ordner_steuer(x, steuerposten)
         if vorschlag is None:
             m['vorschlag_fehler'] = ('KI nicht eingerichtet' if ki is None
                                      else 'KI hat keinen Ordner vorgeschlagen')
@@ -536,6 +574,11 @@ def nachholen(wurzel, konto, holen, anhang_ziel=None):
                 n.meta['nachholen_fehler'] = 'Mail nicht mehr im Postfach, nur Kurzinhalt'
         if m is not None:
             anhaenge_sichern(anhang_ziel, n.meta['id'], m)
+            if m.hat_dokument and not anhangtext_lesen(wurzel, n.meta['id']):
+                m.anhangtext = at.texte(m.dokumente)
+                anhangtext_sichern(wurzel, n.meta['id'], m.anhangtext)
+                for k, v in bt.felder(m.betreff, m.text, m.anhangtext).items():
+                    n.meta.setdefault(k, v)
             fertig += 1
         if n.meta.get('mail_drive') and (not n.meta.get('mail_pdf') or _dauerhaft_offen(n.meta)) \
                 and anhang_ziel:
@@ -565,15 +608,16 @@ def unterordner_einsetzen(unterordner, datum):
         '{monat}', '%02d' % datum.month).strip('/')
 
 
-def verarbeiten(mails, ablage, regelwerk, lerner=None, einst=None, ki=None, vertraege=()):
+def verarbeiten(mails, ablage, regelwerk, einst=None, ki=None, steuerposten=None):
     bilanz = Bilanz()
-    lerner = lerner or eo.Lerner([], ablage.themen)
     einst = einst or eo.einstellungen({})
     for mail in mails:
         if mail.message_id and mail.message_id in ablage.bekannt:
             bilanz.doppelt += 1
             continue
-        e = eo.einordnen(mail, regelwerk, lerner, einst, ki, vertraege)
+        if mail.hat_dokument and not mail.anhangtext:
+            mail.anhangtext = at.texte(mail.dokumente)
+        e = eo.einordnen(mail, regelwerk, einst, ki, steuerposten)
         pfad = ablage.ablegen(mail, e)
         setattr(bilanz, e.aktion, getattr(bilanz, e.aktion) + 1)
         if e.aktion in (regeln.NOTIZ, regeln.OFFEN):

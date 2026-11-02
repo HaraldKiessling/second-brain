@@ -4,7 +4,6 @@ import os
 import shutil
 
 import pytest
-import yaml
 
 from second_brain import cli, daten, einordnen as eo, mail, notiz as nz
 
@@ -14,12 +13,14 @@ NEWSLETTER = {'list-unsubscribe': '<mailto:ab@shop.de>', 'precedence': 'bulk',
               'list-id': '<angebote.shop.de>'}
 
 
-def m(absender, betreff, anhang=None, kopf=None, mid=None, kategorie=''):
+def m(absender, betreff, anhang=None, kopf=None, mid=None, kategorie='', text='Hallo',
+      anhangtext='', an=''):
     return mail.Mail(message_id=mid or '<%s|%s>' % (absender, betreff),
                      datum=datetime.date(2026, 10, 28), absender=absender,
-                     betreff=betreff, text='Hallo',
+                     betreff=betreff, text=text,
                      anhaenge=[(anhang, b'%PDF')] if anhang else [],
-                     kopf=kopf or {}, kategorie=kategorie)
+                     kopf=kopf or {}, kategorie=kategorie, anhangtext=anhangtext,
+                     empfaenger=an)
 
 
 @pytest.fixture
@@ -31,8 +32,8 @@ def repo(tmp_path):
 
 def lauf(repo, mails, ki=None):
     ablage = mail.Ablage(repo, 'gmx', heute=HEUTE)
-    return mail.verarbeiten(mails, ablage, daten.regelwerk(repo), daten.lerner(repo),
-                            daten.einstellungen(repo), ki)
+    return mail.verarbeiten(mails, ablage, daten.regelwerk(repo), daten.einstellungen(repo), ki,
+                            daten.steuer_config(repo))
 
 
 def eingang(repo):
@@ -41,14 +42,15 @@ def eingang(repo):
     return [nz.lesen(open(os.path.join(ordner, d), encoding='utf-8').read()) for d in dateien]
 
 
-def notiz_ablegen(repo, nid, absender, thema, ablage, personen=('anna',)):
+def notiz_ablegen(repo, nid, absender, thema, ablage, personen=('anna',), text=''):
     pfad = os.path.join(repo, 'notizen', '2026', thema, nid + '.md')
     os.makedirs(os.path.dirname(pfad), exist_ok=True)
     with open(pfad, 'w', encoding='utf-8') as fh:
         fh.write(nz.schreiben(nz.Notiz(meta={
             'id': nid, 'erstellt': datetime.date(2026, 5, 1), 'quelle': 'gmx',
             'personen': list(personen), 'themen': [thema], 'ablage': ablage,
-            'absender': absender, 'eingeordnet_durch': 'manuell'}, text='# %s\n' % nid)))
+            'absender': absender, 'eingeordnet_durch': 'manuell'},
+            text='# %s\n\n%s\n' % (nid, text))))
 
 
 # --- Spam ------------------------------------------------------------------
@@ -87,94 +89,6 @@ def test_transaktionsmail_mit_abmeldelink_bleibt(repo):
     assert b.index == 1
 
 
-# --- Heuristik -------------------------------------------------------------
-
-def test_eine_fruehere_notiz_ergibt_vorschlag(repo):
-    notiz_ablegen(repo, 'n1', 'post@praxis.de', 'versicherungen',
-                  '0-2026/08Versicherungen/praxis/2026')
-    b = lauf(repo, [m('Praxis <post@praxis.de>', 'Befund', anhang='befund.pdf')])
-    assert b.offen == 1
-    v = eingang(repo)[0].meta['vorschlag']
-    assert v['thema'] == 'versicherungen'
-    assert v['unterordner'] == 'praxis/{jahr}'
-    assert v['konfidenz'] == 0.67
-    assert v['durch'] == 'heuristik/absender'
-
-
-def test_zwei_gleiche_notizen_legen_ohne_rueckfrage_ab(repo):
-    for i in (1, 2):
-        notiz_ablegen(repo, 'n%d' % i, 'post@praxis.de', 'versicherungen',
-                      '0-2026/08Versicherungen/praxis/rechnungen/2026')
-    b = lauf(repo, [m('Praxis <post@praxis.de>', 'Rechnung', anhang='r.pdf')])
-    assert b.notiz == 1
-    [pfad] = [os.path.join(v, d) for v, _, ds in os.walk(os.path.join(repo, 'notizen'))
-              for d in ds if 'praxis-rechnung' in d]
-    n = nz.lesen(open(pfad, encoding='utf-8').read())
-    assert n.meta['ablage'] == '0-2026/08Versicherungen/praxis/rechnungen/2026'
-    assert n.meta['eingeordnet_durch'] == 'heuristik/absender'
-    assert n.meta['konfidenz'] == 0.8
-    assert n.meta['absender'] == 'post@praxis.de'
-    assert daten.pruefen(repo) == []
-
-
-def test_gleiche_domain_mit_geringerer_konfidenz(repo):
-    notiz_ablegen(repo, 'n1', 'a@firma.de', 'edv', '0-2026/31 EDV/firma')
-    notiz_ablegen(repo, 'n2', 'a@firma.de', 'edv', '0-2026/31 EDV/firma')
-    v = daten.lerner(repo).vorschlag('b@firma.de', 'Hallo')
-    assert v.durch == 'heuristik/domain' and v.konfidenz == pytest.approx(0.68)
-
-
-def test_freemail_domain_lernt_nichts(repo):
-    notiz_ablegen(repo, 'n1', 'a@gmail.com', 'edv', '0-2026/31 EDV')
-    assert daten.lerner(repo).vorschlag('b@gmail.com', 'Hallo') is None
-
-
-def test_ablagewissen_schlaegt_vor(repo):
-    b = lauf(repo, [m('Service <service@versicherung-beispiel.de>', 'Beitragsrechnung Hausrat',
-                      anhang='beitrag.pdf')])
-    assert b.offen == 1
-    v = eingang(repo)[0].meta['vorschlag']
-    assert (v['thema'], v['unterordner'], v['konfidenz']) == ('versicherungen', '01Hausrat', 0.7)
-
-
-def test_bestaetigtes_ablagewissen_reicht_beim_naechsten_mal(repo):
-    notiz_ablegen(repo, 'n1', 'service@versicherung-beispiel.de', 'versicherungen',
-                  '0-2026/08Versicherungen/01Hausrat')
-    v = daten.lerner(repo).vorschlag('service@versicherung-beispiel.de', 'Hausrat 2027')
-    assert (v.durch, v.unterordner) == ('heuristik/absender', '01Hausrat')
-    assert v.konfidenz == pytest.approx(0.82, abs=0.01)
-    assert 'passt zu bekannt aus Drive-Ablage' in v.grund
-
-
-def test_ablagewissen_mehrdeutig_gibt_niedrige_konfidenz(repo):
-    v = daten.lerner(repo).vorschlag('service@versicherung-beispiel.de', 'Ihr Vertrag')
-    assert v.konfidenz == 0.4
-
-
-def test_ohne_dokument_und_ohne_vorschlag_nur_index(repo):
-    assert lauf(repo, [m('freund@mail.de', 'Grillen')]).index == 1
-
-
-def test_ohne_dokument_nie_eingang_oder_notiz(repo):
-    for i in (1, 2, 3):
-        notiz_ablegen(repo, 'n%d' % i, 'post@praxis.de', 'versicherungen', '0-2026/08Versicherungen')
-    b = lauf(repo, [m('post@praxis.de', 'Ihr Login-Code 1234'),
-                    m('Service <service@versicherung-beispiel.de>', 'Tipps zur Hausrat')])
-    assert (b.index, b.notiz, b.offen) == (2, 0, 0)
-
-
-def test_an_sich_selbst_gesendet_wird_immer_erfasst(repo):
-    with open(os.path.join(repo, 'config', 'einordnen.yaml'), 'w') as fh:
-        yaml.safe_dump({'eigene_adressen': ['anna@mail.de']}, fh)
-    notiz_ablegen(repo, 'n1', 'anna@mail.de', 'edv', '0-2026/31 EDV')
-    notiz_ablegen(repo, 'n2', 'anna@mail.de', 'edv', '0-2026/31 EDV')
-    b = lauf(repo, [m('Anna <anna@mail.de>', 'Merken: Termin Steuerberater',
-                      kopf={'list-unsubscribe': 'x'})])
-    assert b.offen == 1
-    e = eingang(repo)[0].meta
-    assert e['offen_grund'] == 'an dich selbst gesendet' and 'vorschlag' not in e
-
-
 def test_kleines_bild_ist_kein_dokument():
     logo = m('a@b.de', 'Hallo')
     logo.anhaenge = [('logo.png', b'x' * 2000)]
@@ -208,16 +122,17 @@ def ki_mit(antwort, **kw):
     return ki, gesendet
 
 
-def test_ki_legt_bei_hoher_konfidenz_ab(repo):
+def test_ki_legt_nie_ohne_regel_ab_auch_bei_hoher_konfidenz(repo):
     ki, gesendet = ki_mit({'thema': 'steuer', 'unterordner': 'bescheide/{jahr}',
-                           'personen': ['anna'], 'konfidenz': 0.9, 'grund': 'Bescheid'})
-    b = lauf(repo, [m('amt@stadt.de', 'Bescheid', anhang='b.pdf')], ki)
-    assert b.notiz == 1 and len(gesendet) == 1
-    assert 'Absender: amt@stadt.de' in gesendet[0]['messages'][0]['content']
-    pfad = os.path.join(repo, 'notizen', '2026', 'steuer')
-    n = nz.lesen(open(os.path.join(pfad, os.listdir(pfad)[0]), encoding='utf-8').read())
-    assert n.meta['eingeordnet_durch'] == 'ki/test/modell'
-    assert n.meta['ablage'] == '0-2026/09Steuer/bescheide/2026'
+                           'personen': ['anna'], 'konfidenz': 0.99, 'grund': 'Bescheid'})
+    b = lauf(repo, [m('amt@stadt.de', 'Bescheid', anhang='b.pdf',
+                      anhangtext='Bescheid fuer 2026')], ki)
+    assert (b.notiz, b.offen) == (0, 1) and len(gesendet) == 1
+    inhalt = gesendet[0]['messages'][0]['content']
+    assert 'Absender: amt@stadt.de' in inhalt and 'Text der Anhaenge' in inhalt
+    e = eingang(repo)[0].meta
+    assert e['vorschlag']['durch'] == 'ki/test/modell'
+    assert e['offen_grund'] == 'keine Regel passt, Vorschlag der KI'
 
 
 def test_ki_unsicher_wird_vorschlag(repo):
@@ -258,162 +173,131 @@ def test_unterordner_gueltig():
     assert not eo.unterordner_gueltig('/ionos')
 
 
-def test_schwelle_ist_einstellbar(repo):
-    with open(os.path.join(repo, 'config', 'einordnen.yaml'), 'w') as fh:
-        yaml.safe_dump({'schwelle': 0.6}, fh)
-    notiz_ablegen(repo, 'n1', 'post@praxis.de', 'versicherungen', '0-2026/08Versicherungen')
-    assert lauf(repo, [m('post@praxis.de', 'Befund', anhang='b.pdf')]).notiz == 1
+def test_ki_neue_ordner_mit_gegenpartei_und_nummer(repo):
+    ki, gesendet = ki_mit({'wichtig': False})
+    lauf(repo, [m('x@neu.de', 'Hallo', anhang='a.pdf')], ki)
+    assert 'Gegenpartei' in gesendet[0]['messages'][0]['content']
 
 
-def test_pruefen_meldet_falsches_ablagewissen(repo):
-    with open(os.path.join(repo, 'config', 'ablagewissen.yaml'), 'w') as fh:
-        yaml.safe_dump({'eintraege': [{'muster': ['x'], 'thema': 'gibtsnicht'}]}, fh)
-    assert daten.pruefen(repo) == [('config/ablagewissen.yaml',
-                                    'Eintrag 1: Thema unbekannt: gibtsnicht')]
+# --- Regeln im Ablauf -------------------------------------------------------
+
+def test_regel_legt_ab_und_merkt_woran_erkannt(repo):
+    lauf(repo, [m('Hoster <billing@hoster-beispiel.de>', 'Rechnung', anhang='r.pdf',
+                  text='Rechnungsbetrag 12,00 EUR, Abbuchung am 05.11.2026')])
+    pfad = os.path.join(repo, 'notizen', '2026', 'edv', '2026-10-28-hoster-rechnung.md')
+    n = nz.lesen(open(pfad, encoding='utf-8').read())
+    assert n.meta['eingeordnet_durch'] == 'regel/hoster'
+    assert n.meta['regel_treffer'] == [{'teil': 'absender', 'wert': 'hoster-beispiel.de',
+                                        'regel': 'hoster'}]
+    assert n.meta['betrag'] == 12.0 and n.meta['zahlung'] == datetime.date(2026, 11, 5)
+    assert n.meta['steuer'] == ['anna.n.arbeitsmittel']
+    assert daten.pruefen(repo) == []
 
 
-def test_cli_einordnen(capsys):
-    assert cli.main(['einordnen', BEISPIEL, 'service@versicherung-beispiel.de',
-                     'Hausrat', '--anhang', 'a.pdf']) == 0
-    aus = capsys.readouterr().out
-    assert 'offen, Konfidenz 0.70' in aus
-    assert 'thema=versicherungen unterordner=01Hausrat' in aus
+def test_nummer_im_anhangtext_reicht(repo):
+    b = lauf(repo, [m('service@versicherer.de', 'Ihre Unterlagen', anhang='u.pdf',
+                      anhangtext='Versicherungsschein Nr. 624 220429 P')])
+    assert b.notiz == 1
+    pfad = os.path.join(repo, 'notizen', '2026', 'versicherungen')
+    n = nz.lesen(open(os.path.join(pfad, os.listdir(pfad)[0]), encoding='utf-8').read())
+    assert n.meta['ablage'] == '0-2026/08Versicherungen/07Kfz_624_220429-P'
+    assert n.meta['objekte'] == ['auto']
 
 
-# --- Regelvorschlaege ------------------------------------------------------
+def test_regelkonflikt_landet_mit_beiden_regeln_im_eingang(repo):
+    b = lauf(repo, [m('billing@hoster-beispiel.de', 'Kfz 624/220429-P', anhang='r.pdf')])
+    assert (b.notiz, b.offen) == (0, 1)
+    e = eingang(repo)[0].meta
+    assert e['regelkonflikt'] == ['hoster', 'kfz-624-220429-p']
+    assert e['offen_grund'] == 'Regelkonflikt: hoster, kfz-624-220429-p'
+    v = e['vorschlag']
+    assert {v['thema'], v['alternativen'][0]['thema']} == {'edv', 'versicherungen'}
 
-def test_regelvorschlag_aus_gleichen_entscheidungen(repo, capsys):
+
+def test_aussortieren_ist_eine_regel(repo):
+    b = lauf(repo, [m('Shop <newsletter@shop.de>', 'Neuigkeiten')])
+    assert b.verwerfen == 1
+    with open(os.path.join(repo, 'index', 'mail', '2026-10.jsonl'), encoding='utf-8') as fh:
+        assert json.loads(fh.readline())['verworfen'].startswith('Regel newsletter')
+
+
+def test_merkmalregeln_ergaenzen_regel_und_ki(repo):
+    lauf(repo, [m('Hoster <billing@hoster-beispiel.de>', 'Rechnung', anhang='r.pdf',
+                  an='ben@beispiel.de', anhangtext='Arbeitskosten 80,00 EUR')])
+    pfad = os.path.join(repo, 'notizen', '2026', 'edv', '2026-10-28-hoster-rechnung.md')
+    n = nz.lesen(open(pfad, encoding='utf-8').read())
+    assert n.meta['personen'] == ['ben']
+    assert n.meta['steuer'] == ['anna.n.arbeitsmittel', 'anna.35a.handwerker']
+    assert n.meta['lohnanteil'] == 80.0
+    ki, _ = ki_mit({'thema': 'steuer', 'personen': ['anna'], 'konfidenz': 0.7})
+    lauf(repo, [m('maler@firma.de', 'Rechnung Malerarbeiten', anhang='m.pdf',
+                  anhangtext='Lohnkosten 300,00 EUR')], ki)
+    assert eingang(repo)[0].meta['vorschlag']['steuer'] == ['anna.35a.handwerker']
+
+
+def test_ohne_regel_mit_dokument_immer_zu_erledigen(repo):
+    b = lauf(repo, [m('wer@irgendwo.de', 'Vertrag', anhang='v.pdf')])
+    assert b.offen == 1
+    assert eingang(repo)[0].meta['offen_grund'] == 'keine Regel passt'
+
+
+def test_an_sich_selbst_gesendet_wird_immer_erfasst(repo):
+    with open(os.path.join(repo, 'config', 'einordnen.yaml'), 'a', encoding='utf-8') as fh:
+        fh.write('eigene_adressen: [anna@beispiel.de]\n')
+    b = lauf(repo, [m('Anna <anna@beispiel.de>', 'Notiz an mich')])
+    assert b.offen == 1
+    assert eingang(repo)[0].meta['offen_grund'] == 'an dich selbst gesendet'
+
+
+# --- Regelvorschlaege --------------------------------------------------------
+
+def test_regelvorschlag_mit_gemeinsamer_nummer_und_beispielen(repo, capsys):
     for i in (1, 2):
-        notiz_ablegen(repo, 'p%d' % i, 'info@praxis.de', 'versicherungen',
-                      '0-2026/08Versicherungen/praxis/2026')
-    notiz_ablegen(repo, 'u1', 'a@uneins.de', 'edv', '0-2026/31 EDV')
-    notiz_ablegen(repo, 'u2', 'b@uneins.de', 'steuer', '0-2026/09Steuer')
-    notiz_ablegen(repo, 'g1', 'x@gmail.com', 'edv', '0-2026/31 EDV')
-    notiz_ablegen(repo, 'g2', 'y@gmail.com', 'edv', '0-2026/31 EDV')
-    [v] = daten.regelvorschlaege_schreiben(repo)
-    assert v == {'name': 'praxis', 'absender': ['praxis.de'], 'thema': 'versicherungen',
-                 'unterordner': 'praxis/{jahr}', 'personen': ['anna'],
-                 'grund': '2 Notizen von praxis.de, alle gleich eingeordnet'}
+        notiz_ablegen(repo, 'w%d' % i, 'kasse@werke.de', 'versicherungen',
+                      '0-2026/08Versicherungen/Werke_4711-0815', text='Kundennummer 4711-0815')
     assert cli.main(['regelvorschlaege', repo]) == 0
-    assert 'praxis: praxis.de -> versicherungen' in capsys.readouterr().out
+    with open(os.path.join(repo, 'regeln', 'mail-vorschlaege.json'), encoding='utf-8') as fh:
+        [v] = json.load(fh)['vorschlaege']
+    assert v['wenn'] == [{'teil': 'ueberall', 'vergleich': 'nummer', 'werte': ['4711-0815']}]
+    assert v['dann']['unterordner'] == 'Werke_4711-0815'
+    assert v['passt'] == 2 and v['konflikte'] == [] and v['wert_im_ordner'] is True
+    assert 'werke' in capsys.readouterr().out.lower()
 
 
-def test_kein_vorschlag_wenn_regel_schon_greift_oder_abgelehnt(repo):
+def test_regelvorschlag_nach_domain_und_nicht_wenn_abgelehnt(repo):
     for i in (1, 2):
-        notiz_ablegen(repo, 'h%d' % i, 'billing@hoster-beispiel.de', 'edv', '0-2026/31 EDV/hoster')
-        notiz_ablegen(repo, 'p%d' % i, 'info@praxis.de', 'versicherungen', '0-2026/08Versicherungen')
-    with open(os.path.join(repo, 'regeln', 'mail-vorschlaege.json'), 'w') as fh:
-        json.dump({'abgelehnt': ['praxis.de'], 'vorschlaege': []}, fh)
+        notiz_ablegen(repo, 'p%d' % i, 'post@praxis.de', 'versicherungen',
+                      '0-2026/08Versicherungen/praxis')
+    [v] = daten.regelvorschlaege_schreiben(repo)
+    assert v['wenn'][0] == {'teil': 'absender', 'vergleich': 'wort', 'werte': ['praxis.de']}
+    pfad = os.path.join(repo, 'regeln', 'mail-vorschlaege.json')
+    d = json.load(open(pfad, encoding='utf-8'))
+    d['abgelehnt'] = ['praxis.de']
+    json.dump(d, open(pfad, 'w', encoding='utf-8'))
     assert daten.regelvorschlaege_schreiben(repo) == []
 
 
-# --- KI mit mehreren Vorschlaegen, Laufprotokoll ------------------------------
-
-def test_ki_mehrdeutig_landet_mit_alternativen_im_eingang(repo):
-    ki, gesendet = ki_mit({'spam': False, 'vorschlaege': [
-        {'thema': 'versicherungen', 'personen': ['anna'], 'konfidenz': 0.85, 'grund': 'Versicherung'},
-        {'thema': 'steuer', 'unterordner': 'grundsteuer', 'personen': ['anna'], 'konfidenz': 0.75}]})
-    ki.hinweise = 'Gebaeudeversicherung gehoert zur Immobilie.'
-    ki.unterordner = {'versicherungen': {'01Hausrat'}}
-    b = lauf(repo, [m('vers@x.de', 'Gebaeudeversicherung', anhang='p.pdf')], ki)
-    assert b.offen == 1
-    prompt = gesendet[0]['messages'][0]['content']
-    assert 'Gebaeudeversicherung gehoert zur Immobilie.' in prompt
-    assert 'Unterordner: 01Hausrat' in prompt
-    v = eingang(repo)[0].meta['vorschlag']
-    assert v['konfidenz'] == 0.6 and 'mehrere Ordner' in v['grund']
-    assert v['alternativen'][0]['thema'] == 'steuer'
+def test_vorschlag_aus_neuaufbau_bleibt_und_wird_geprueft(repo):
+    pfad = os.path.join(repo, 'regeln', 'mail-vorschlaege.json')
+    v = {'name': 'kfz-neu', 'art': 'ordner', 'herkunft': 'bestand', 'grund': 'Drive',
+         'wenn': [{'teil': 'absender', 'vergleich': 'wort', 'werte': ['hoster-beispiel.de']}],
+         'dann': {'thema': 'edv', 'unterordner': 'x'}}
+    json.dump({'abgelehnt': [], 'vorschlaege': [v]}, open(pfad, 'w', encoding='utf-8'))
+    [neu] = daten.regelvorschlaege_schreiben(repo)
+    assert neu['name'] == 'kfz-neu' and neu['passt'] == 1
+    assert neu['konflikte'][0]['regeln'] == ['hoster']
 
 
-def test_ki_eindeutig_legt_ab(repo):
-    ki, _ = ki_mit({'spam': False, 'vorschlaege': [
-        {'thema': 'steuer', 'personen': ['anna'], 'konfidenz': 0.95},
-        {'thema': 'edv', 'personen': ['anna'], 'konfidenz': 0.3}]})
-    assert lauf(repo, [m('amt@x.de', 'Bescheid', anhang='b.pdf')], ki).notiz == 1
+def test_cli_einordnen(capsys):
+    assert cli.main(['einordnen', BEISPIEL, 'Hoster <billing@hoster-beispiel.de>', 'Rechnung',
+                     '--anhang', 'r.pdf']) == 0
+    aus = capsys.readouterr().out
+    assert 'notiz (Regel hoster' in aus and 'erkannt an: Absender: hoster-beispiel.de' in aus
 
 
-def test_lauf_wird_fuer_die_uebersicht_protokolliert(repo):
-    ablage = mail.Ablage(repo, 'gmx', heute=HEUTE)
-    b = mail.verarbeiten([m('billing@hoster-beispiel.de', 'Rechnung', anhang='r.pdf'),
-                          m('freund@mail.de', 'Hallo')], ablage, daten.regelwerk(repo))
-    jetzt = datetime.datetime(2026, 10, 30, 12, tzinfo=datetime.timezone.utc)
-    pfad = mail.lauf_protokollieren(repo, 'gmx', b, jetzt)
-    zeile = json.loads(open(pfad, encoding='utf-8').readline())
-    assert (zeile['notiz'], zeile['index'], zeile['konto']) == (1, 1, 'gmx')
-    [e] = zeile['eintraege']
-    assert e['pfad'].startswith('notizen/2026/edv/') and e['durch'] == 'regel/hoster'
-    assert mail.lauf_protokollieren(repo, 'gmx', mail.Bilanz(), jetzt) is None
-
-
-# --- Wichtig ohne Anhang, Mail als PDF --------------------------------------
-
-def test_ki_haelt_mail_ohne_anhang_fuer_wichtig_vorschlag_im_eingang(repo):
-    ki, gesendet = ki_mit({'wichtig': True, 'pdf': True, 'vorschlaege': [
-        {'thema': 'steuer', 'unterordner': 'reisen', 'personen': ['anna'], 'konfidenz': 0.95,
-         'grund': 'Buchungsbestaetigung'}]})
-    b = lauf(repo, [m('buchung@hotel.de', 'Ihre Buchungsbestätigung')], ki)
-    assert (b.index, b.notiz, b.offen) == (0, 0, 1)   # nie ohne Rueckfrage
-    e = eingang(repo)[0].meta
-    assert e['offen_grund'].startswith('KI hält die Mail für wichtig')
-    assert e['vorschlag']['mail_drive'] is True and e['ohne_anhang'] is True
-
-
-def test_ki_nicht_wichtig_bleibt_index_spam_wird_nicht_gefragt(repo):
-    ki, gesendet = ki_mit({'wichtig': False, 'vorschlaege': [
-        {'thema': 'steuer', 'personen': ['anna'], 'konfidenz': 0.9}]})
-    b = lauf(repo, [m('shop@laden.de', 'Ihr Paket ist unterwegs'),
-                    m('Shop <news@shop.de>', 'Neue Produkte', kopf=NEWSLETTER)], ki)
-    assert b.offen == 0 and b.notiz == 0
-    assert len(gesendet) == 1
-
-
-def test_ki_bekommt_bisherige_ablage_als_beispiele(repo):
-    notiz_ablegen(repo, 'n1', 'post@praxis.de', 'versicherungen', '0-2026/08Versicherungen/praxis')
-    ki, gesendet = ki_mit({'wichtig': False},
-                          beispiele=eo.beispiele_aus_notizen(daten.notiz_pfade(repo),
-                                                             daten.themen(repo)))
-    lauf(repo, [m('x@neu.de', 'Hallo')], ki)
-    assert 'praxis.de | n1 -> versicherungen/praxis' in gesendet[0]['messages'][0]['content']
-
-
-def notiz_ohne_anhang(repo, nid, absender, mail_drive=False):
-    pfad = os.path.join(repo, 'notizen', '2026', 'steuer', nid + '.md')
-    os.makedirs(os.path.dirname(pfad), exist_ok=True)
-    meta = {'id': nid, 'erstellt': datetime.date(2026, 5, 1), 'quelle': 'gmx',
-            'personen': ['anna'], 'themen': ['steuer'], 'ablage': '0-2026/09Steuer/hotel',
-            'absender': absender, 'eingeordnet_durch': 'manuell', 'ohne_anhang': True}
-    if mail_drive:
-        meta['mail_drive'] = True
-    with open(pfad, 'w', encoding='utf-8') as fh:
-        fh.write(nz.schreiben(nz.Notiz(meta=meta, text='# %s\n' % nid)))
-
-
-def test_gelernt_absender_ohne_anhang_wird_mit_pdf_abgelegt(repo, tmp_path):
-    notiz_ohne_anhang(repo, 'h1', 'buchung@hotel.de', mail_drive=True)
-    notiz_ohne_anhang(repo, 'h2', 'buchung@hotel.de', mail_drive=True)
-    ablage = mail.Ablage(repo, 'gmx', anhang_ziel=str(tmp_path / 'anh'), heute=HEUTE)
-    b = mail.verarbeiten([m('Hotel <buchung@hotel.de>', 'Buchung Dezember')], ablage,
-                         daten.regelwerk(repo), daten.lerner(repo), daten.einstellungen(repo))
-    assert b.notiz == 1
-    [e] = b.eintraege
-    n = nz.lesen(open(os.path.join(repo, e['pfad']), encoding='utf-8').read())
-    assert n.meta['mail_drive'] is True and n.meta['ablage'] == '0-2026/09Steuer/hotel'
-    assert (tmp_path / 'anh' / n.meta['id'] / mail.MAIL_SEITE).exists()
-
-
-def test_einmal_ohne_anhang_abgelegt_gibt_vorschlag_im_eingang(repo):
-    notiz_ohne_anhang(repo, 'h1', 'buchung@hotel.de')
-    b = lauf(repo, [m('buchung@hotel.de', 'Buchung Januar')])
-    assert b.offen == 1
-    assert eingang(repo)[0].meta['offen_grund'].startswith('ohne Anhang, aber von dir')
-
-
-def test_regel_mit_mail_drive_und_regelvorschlag_ohne_anhang(repo):
-    notiz_ohne_anhang(repo, 'h1', 'buchung@hotel.de', mail_drive=True)
-    notiz_ohne_anhang(repo, 'h2', 'buchung@hotel.de', mail_drive=True)
-    [v] = daten.regelvorschlaege_schreiben(repo)
-    assert v['ohne_anhang'] is True and v['mail_drive'] is True
-    regelwerk = {'regeln': [dict(v, name='hotel')]}
-    e = eo.einordnen(m('buchung@hotel.de', 'Buchung'), regelwerk, daten.lerner(repo),
-                     daten.einstellungen(repo))
-    assert e.aktion == 'notiz' and e.mail_drive
+def test_cli_konflikte_und_bestand(repo, capsys):
+    lauf(repo, [m('billing@hoster-beispiel.de', 'Kfz 624/220429-P', anhang='r.pdf')])
+    assert cli.main(['bestand', repo]) == 0
+    assert os.path.exists(os.path.join(repo, 'index', 'bestand.jsonl'))
+    assert cli.main(['konflikte', repo, '--streng']) == 1
+    assert 'Konflikt hoster / kfz-624-220429-p' in capsys.readouterr().out
