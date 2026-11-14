@@ -1,0 +1,45 @@
+{
+  "version": 3,
+  "standard_personen": ["anna"],
+  "regeln": [
+    {
+      "name": "hoster",
+      "art": "ordner",
+      "wenn": [{"teil": "absender", "vergleich": "wort", "werte": ["hoster-beispiel.de"]}],
+      "dann": {"thema": "edv", "unterordner": "hoster", "steuer": ["anna.n.arbeitsmittel"]}
+    },
+    {
+      "name": "kfz-624-520000-p",
+      "art": "ordner",
+      "wenn": [{"teil": "ueberall", "vergleich": "nummer", "werte": ["624/520000-P"]}],
+      "dann": {"thema": "versicherungen", "unterordner": "07Kfz_624_520000-P",
+               "objekte": ["auto"], "steuer": ["anna.vor.kfz-haftpflicht"]}
+    },
+    {
+      "name": "finanzamt-bescheid",
+      "art": "ordner",
+      "wenn": [
+        {"teil": "absender", "vergleich": "wort", "werte": ["finanzamt"]},
+        {"teil": "betreff", "vergleich": "wort", "werte": ["steuerbescheid", "bescheid"]}
+      ],
+      "dann": {"thema": "steuer", "unterordner": "Finanzamt", "personen": ["anna", "ben"]}
+    },
+    {
+      "name": "newsletter",
+      "art": "aussortieren",
+      "wenn": [{"teil": "absender", "vergleich": "wort", "werte": ["newsletter", "linkedin.com"]}]
+    },
+    {
+      "name": "handwerker-35a",
+      "art": "merkmal",
+      "wenn": [{"teil": "anhangtext", "vergleich": "wort", "werte": ["Arbeitskosten", "Lohnkosten", "Arbeitslohn"]}],
+      "dann": {"steuer": ["anna.35a.handwerker"]}
+    },
+    {
+      "name": "an-ben",
+      "art": "merkmal",
+      "wenn": [{"teil": "empfaenger", "vergleich": "wort", "werte": ["ben@beispiel.de"]}],
+      "dann": {"personen": ["ben"]}
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+# Objekte: worauf sich ein Beleg bezieht. Eine Notiz kann mehrere haben (objekte: [...]).
+# Steuerbezuege stehen in config/steuerposten.yaml.
+objekte:
+  haus:
+    name: Eigenheim
+  auto:
+    name: Auto
