@@ -132,6 +132,28 @@ _Avoid_: Log
 Was ein **Adapter** braucht, um seine **Quelle** zu erreichen (Adresse, Passwort, API-Schlüssel). Sie liegen als GitHub-Secret und sind danach nicht mehr lesbar; die einzige lesbare Kopie hat des Nutzers Google Passwortmanager. Für Mail-Konten sind es App-Passwörter, nie das normale Konto-Passwort, deshalb liegt nichts doppelt.
 _Avoid_: Credentials, Login, Secret (für den Wert selbst)
 
+## Energie und §14a
+
+**Steuerbare Verbrauchseinrichtung (steuVE)**:
+Ein Verbraucher, den der Netzbetreiber nach § 14a EnWG dimmen darf, weil er eine bestimmte Leistung überschreitet (Wärmepumpe, Wallbox, Klimagerät, Batteriespeicher).
+_Avoid_: steuerbarer Verbraucher, Flexibilität
+
+**Steuerbox**:
+Das Gerät des Netzbetreibers, das das §14a-Signal entgegennimmt und als potentialfreien Kontakt oder geschalteten Ausgang an die Kundenanlage weitergibt. Sie sitzt im plombierten Bereich und wird vom Netzbetreiber versorgt.
+_Avoid_: Smart Meter Gateway (das ist die Kommunikationseinheit), EMS
+
+**Dimmung**:
+Die §14a-Vorgabe, die Leistung einer steuVE auf eine Mindestleistung zu begrenzen, statt sie abzuschalten. Die Mindestleistung beträgt 4,2 kW je steuVE.
+_Avoid_: Abschaltung, Sperre (eine Sperre ist keine Dimmung)
+
+**Oberer Anschlussraum (OAR)**:
+Der obere, vom Netzbetreiber verplombte Teil des Zählerschranks, in dem Zähler, Steuerbox und Anschlussklemmen sitzen. Der Kunde darf ihn nicht öffnen und nicht einspeisen.
+_Avoid_: Zählerkasten, Verteiler
+
+**EVU-Sperre**:
+Der potentialfreie Eingang an Erzeugern und Wärmepumpen, über den der Netzbetreiber Lasten freigibt oder sperrt; bei der Wärmepumpe sperrt er im §14a-Fall nur die Zusatzheizung, nicht den Kompressor.
+_Avoid_: Lastabwurf, Not-Aus
+
 ## Wörter in der Web-App
 
 Die Web-App spricht Alltagssprache; die Begriffe oben gelten in Code und Doku.
