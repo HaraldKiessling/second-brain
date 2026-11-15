@@ -143,15 +143,15 @@ Das Gerät des Netzbetreibers, das das §14a-Signal entgegennimmt und als potent
 _Avoid_: Smart Meter Gateway (das ist die Kommunikationseinheit), EMS
 
 **Dimmung**:
-Die §14a-Vorgabe, die Leistung einer steuVE auf eine Mindestleistung zu begrenzen, statt sie abzuschalten. Die Mindestleistung beträgt 4,2 kW je steuVE.
-_Avoid_: Abschaltung, Sperre (eine Sperre ist keine Dimmung)
+Die Begrenzung der Leistung einer steuVE durch den Netzbetreiber auf höchstens 4,2 kW. Tiefer als 4,2 kW darf der Netzbetreiber nicht gehen; der Anlagenbetreiber darf seine Anlage freiwillig auch vollständig abschalten.
+_Avoid_: Abschaltung (die ist eine Betreiberentscheidung), Sperre
 
 **Oberer Anschlussraum (OAR)**:
-Der obere, vom Netzbetreiber verplombte Teil des Zählerschranks, in dem Zähler, Steuerbox und Anschlussklemmen sitzen. Der Kunde darf ihn nicht öffnen und nicht einspeisen.
+Der obere Teil des Zählerschranks, in dem Zähler, Steuerbox und Anschlussklemmen des Netzbetreibers sitzen. Er kann plombiert sein; auch unplombiert bleiben die Betriebsmittel des Netzbetreibers unberührt, und der Kunde speist dort nicht ein.
 _Avoid_: Zählerkasten, Verteiler
 
 **EVU-Sperre**:
-Der potentialfreie Eingang an Erzeugern und Wärmepumpen, über den der Netzbetreiber Lasten freigibt oder sperrt; bei der Wärmepumpe sperrt er im §14a-Fall nur die Zusatzheizung, nicht den Kompressor.
+Der potentialfreie Eingang an Erzeugern und Wärmepumpen, über den der Netzbetreiber Lasten freigibt oder sperrt. Bei der Vaillant-Anlage ist es ein Schließer an S21: geschlossen sperrt, offen ist Normalbetrieb. Er sperrt nur die Zusatzheizung, nicht den Kompressor.
 _Avoid_: Lastabwurf, Not-Aus
 
 ## Wörter in der Web-App
