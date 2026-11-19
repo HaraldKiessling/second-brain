@@ -4,3 +4,7 @@ __pycache__/
 .pytest_cache/
 build/
 dist/
+
+# Personenbezogene Unterlagen (Name, Anschrift, Geraetekennungen) gehoeren
+# ins private Repo second-brain-data, nie hierher.
+docs/energie/
