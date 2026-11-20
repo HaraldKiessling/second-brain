@@ -1,0 +1,13 @@
+{
+  "name": "md2pdf",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Offline Markdown zu PDF (A4) fuer die 14a-Dokumente",
+  "bin": {
+    "md2pdf": "./md2pdf.mjs"
+  },
+  "dependencies": {
+    "@resvg/resvg-js": "^2.6.2"
+  }
+}
